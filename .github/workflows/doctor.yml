@@ -50,12 +50,12 @@ jobs:
             GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
             GEMINI_MODEL: gemini-3-flash-preview
             GEMINI_TEMP: '0.2'
-          ALLOWED_ACTIONS: ${{ github.event.inputs.ALLOWED_ACTIONS || 'create_pr' }}
-          HITL_ENABLED: ${{ github.event.inputs.HITL_ENABLED || 'true' }}
-          # Label or comment the PR with this label to signal approval when HITL is enabled
-          AGENTIC_APPROVAL_LABEL: 'agentic-approved'
-          # Comma-separated usernames allowed to approve (optional)
-          AGENTIC_APPROVERS: ''
-          # If true (opt-in), agent may auto-merge after approval; default false
-          AUTO_MERGE: 'false'
+            ALLOWED_ACTIONS: ${{ github.event.inputs.ALLOWED_ACTIONS || 'create_pr' }}
+            HITL_ENABLED: ${{ github.event.inputs.HITL_ENABLED || 'true' }}
+            # Label or comment the PR with this label to signal approval when HITL is enabled
+            AGENTIC_APPROVAL_LABEL: 'agentic-approved'
+            # Comma-separated usernames allowed to approve (optional)
+            AGENTIC_APPROVERS: ''
+            # If true (opt-in), agent may auto-merge after approval; default false
+            AUTO_MERGE: 'false'
         run: python agentic.py
