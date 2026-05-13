@@ -4,6 +4,16 @@ on:
     workflows: ["CI", "CD"]
     types:
       - completed
+  workflow_dispatch:
+    inputs:
+      ALLOWED_ACTIONS:
+        description: 'Comma-separated allowed actions (e.g., write_temp,create_pr)'
+        required: false
+        default: 'create_pr'
+      HITL_ENABLED:
+        description: 'If true, wait for manual approval marker file before creating PR'
+        required: false
+        default: 'true'
 jobs:
   doctor:
     runs-on: ubuntu-latest
@@ -33,13 +43,19 @@ jobs:
           
       - name: Run Pipeline Doctor
         env:
-            github_token: ${{ secrets.GITHUB_TOKEN }}
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
             workflow_run_id: ${{ github.event.workflow_run.id }}
             ai_env_variable: ${{ secrets.AI_ENV_VARIABLE }}
             output_file: pipeline_doctor_report.md
             GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
             GEMINI_MODEL: gemini-3-flash-preview
             GEMINI_TEMP: '0.2'
-            ALLOWED_ACTIONS: 'write_temp,create_pr'   # tune per safety
-            HITL_ENABLED: 'true'  
+          ALLOWED_ACTIONS: ${{ github.event.inputs.ALLOWED_ACTIONS || 'create_pr' }}
+          HITL_ENABLED: ${{ github.event.inputs.HITL_ENABLED || 'true' }}
+          # Label or comment the PR with this label to signal approval when HITL is enabled
+          AGENTIC_APPROVAL_LABEL: 'agentic-approved'
+          # Comma-separated usernames allowed to approve (optional)
+          AGENTIC_APPROVERS: ''
+          # If true (opt-in), agent may auto-merge after approval; default false
+          AUTO_MERGE: 'false'
         run: python agentic.py

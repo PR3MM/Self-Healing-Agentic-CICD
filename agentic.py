@@ -26,8 +26,9 @@ def log(level: str, msg: str, *args) -> None:
 MAX_ITERATIONS = int(os.getenv("MAX_ITERATIONS", "3"))
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 TEMPERATURE = float(os.getenv("GEMINI_TEMP", "0.2"))
-# Comma-separated allowed actions for guardrails: write_temp, create_pr, commit
-ALLOWED_ACTIONS = set([a.strip() for a in os.getenv("ALLOWED_ACTIONS", "write_temp,create_pr,commit").split(",") if a.strip()])
+# Comma-separated allowed actions for guardrails: create_pr, auto_merge, commit
+# Default: allow creating PRs (staged patches are still written locally unconditionally)
+ALLOWED_ACTIONS = set([a.strip() for a in os.getenv("ALLOWED_ACTIONS", "create_pr").split(",") if a.strip()])
 
 # 2. INITIALIZE LLM
 # Make sure export GEMINI_API_KEY="your-key-here" is set in your terminal
@@ -287,10 +288,9 @@ def fix_code_node(state: AgenticState) -> dict:
     cleaned = strip_fences(resp_text)
     save_audit(iteration, 'fix_response', prompt, resp_text)
 
-    # Basic guardrail: ensure we are allowed to write temp files
-    if 'write_temp' not in ALLOWED_ACTIONS:
-        log('ERROR', 'Action write_temp is not allowed by ALLOWED_ACTIONS. Aborting patch write.')
-        raise RuntimeError('write_temp not permitted')
+    # Stage patch locally (always). PR creation is gated by 'create_pr' in ALLOWED_ACTIONS.
+    if 'create_pr' not in ALLOWED_ACTIONS:
+        log('INFO', "create_pr not enabled; patch will be staged locally only.")
 
     patched_path = write_temp_patch(iteration + 1, current_file, cleaned)
     new_iteration_count = iteration + 1
