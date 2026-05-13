@@ -392,9 +392,11 @@ agent_builder.add_edge("fix_code", "test_code")
 
 agent_builder.add_conditional_edges("test_code", route_after_test)
 
-# Wire HITL/PR transitions:
-agent_builder.add_edge("wait_for_approval", "create_pr", condition=lambda s: s.get("approved", False))
-agent_builder.add_edge("wait_for_approval", END, condition=lambda s: not s.get("approved", False))
+# Wire HITL/PR transitions using the StateGraph conditional API
+def route_after_approval(state: AgenticState) -> str:
+    return "create_pr" if state.get("approved", False) else END
+
+agent_builder.add_conditional_edges("wait_for_approval", route_after_approval)
 agent_builder.add_edge("create_pr", END)
 
 agentic_graph = agent_builder.compile()
