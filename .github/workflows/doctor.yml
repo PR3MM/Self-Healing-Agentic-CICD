@@ -40,7 +40,9 @@ jobs:
       #  so this command, basically tells Python pip command to find PiP module in the same Python version that we are using and to upgrade itself
         run: |
           python -m pip install --upgrade pip
-          pip install docker langgraph
+          # Install project requirements and runtime dependencies used by agentic.py
+          pip install -r requirements.txt || true
+          pip install PyGithub google-generativeai langchain-google-genai docker langgraph
           
       - name: Run Pipeline Doctor
         env:
@@ -60,3 +62,13 @@ jobs:
             # If true (opt-in), agent may auto-merge after approval; default false
             AUTO_MERGE: 'false'
         run: python agentic.py
+      - name: List staged artifacts
+        if: always()
+        run: ls -la .agentic_tmp || true
+
+      - name: Upload Agentic artifacts
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: agentic-artifacts
+          path: .agentic_tmp/**
