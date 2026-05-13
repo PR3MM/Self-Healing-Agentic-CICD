@@ -38,7 +38,7 @@ jobs:
             ai_env_variable: ${{ secrets.AI_ENV_VARIABLE }}
             output_file: pipeline_doctor_report.md
             GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-            GEMINI_MODEL: gemini-2.5-flash
+            GEMINI_MODEL: gemini-3-flash-preview
             GEMINI_TEMP: '0.2'
             ALLOWED_ACTIONS: 'write_temp,create_pr'   # tune per safety
             HITL_ENABLED: 'true'  
