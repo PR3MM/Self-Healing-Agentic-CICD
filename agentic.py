@@ -273,18 +273,38 @@ def fetch_logs_node(state: AgenticState) -> dict:
     workflow_run_id = os.getenv("workflow_run_id")
     repo_full_name = os.getenv("GITHUB_REPO") or os.getenv("GITHUB_REPOSITORY")
 
-    if workflow_run_id and repo_full_name:
-        log('INFO', "-> Fetching REAL crash logs from GitHub Actions (run_id=%s)...", workflow_run_id)
+    if repo_full_name:
         try:
             gh = github_client()
             repo = gh.get_repo(repo_full_name)
-            run = repo.get_workflow_run(int(workflow_run_id))
+
+            run = None
+            # If we have a specific run ID (from workflow_run trigger), use it
+            if workflow_run_id:
+                log('INFO', "-> Fetching logs from triggered workflow run (run_id=%s)...", workflow_run_id)
+                run = repo.get_workflow_run(int(workflow_run_id))
+            else:
+                # Manual dispatch: find the most recent failed run automatically
+                log('INFO', "-> No workflow_run_id (manual dispatch). Searching for latest failed CI run...")
+                failed_runs = repo.get_workflow_runs(status="failure")
+                for candidate in failed_runs:
+                    # Skip Pipeline Doctor's own runs — we want CI/CD failures
+                    if candidate.name and "doctor" in candidate.name.lower():
+                        continue
+                    run = candidate
+                    log('INFO', "-> Found latest failed run: %s (id=%d, workflow=%s)", 
+                        run.html_url, run.id, run.name)
+                    break
+
+            if run is None:
+                log('WARNING', "-> No failed workflow run found in the repository.")
+                return {"logs": "No failed workflow runs found. Nothing to diagnose."}
+
             # Download logs from all failed jobs
             logs_parts = []
             for job in run.jobs():
                 if job.conclusion == "failure":
                     log('INFO', "-> Fetching logs for failed job: %s", job.name)
-                    # Get the log text for each failed step
                     for step in job.steps:
                         if step.conclusion == "failure":
                             logs_parts.append(
@@ -297,7 +317,7 @@ def fetch_logs_node(state: AgenticState) -> dict:
             import io
             token = os.getenv("GITHUB_TOKEN")
             headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
-            logs_url = f"https://api.github.com/repos/{repo_full_name}/actions/runs/{workflow_run_id}/logs"
+            logs_url = f"https://api.github.com/repos/{repo_full_name}/actions/runs/{run.id}/logs"
             resp = req.get(logs_url, headers=headers, allow_redirects=True)
             if resp.status_code == 200:
                 z = zipfile.ZipFile(io.BytesIO(resp.content))
@@ -317,17 +337,14 @@ def fetch_logs_node(state: AgenticState) -> dict:
                 log('INFO', "-> Fetched %d chars of real logs from %d log sections", len(real_logs), len(logs_parts))
                 return {"logs": real_logs}
             else:
-                log('WARNING', "-> No failure logs found in workflow run, falling back to simulated logs.")
+                log('WARNING', "-> No failure logs found in workflow run.")
+                return {"logs": "Workflow run found but no failure logs could be extracted."}
         except Exception as e:
-            log('ERROR', "-> Failed to fetch real logs: %s. Falling back to simulated logs.", str(e))
+            log('ERROR', "-> Failed to fetch logs: %s", str(e))
+            return {"logs": f"Failed to fetch logs from GitHub: {str(e)}"}
 
-    log('INFO', "-> Using simulated crash logs (no workflow_run_id or fetch failed).")
-    simulated_logs = """Traceback (most recent call last):
-  File "app.py", line 10, in <module>
-    import requests
-ModuleNotFoundError: No module named 'requests'"""
-
-    return {"logs": simulated_logs}
+    log('ERROR', "-> No GITHUB_REPO set. Cannot fetch logs.")
+    return {"logs": "No GITHUB_REPO configured. Cannot fetch failure logs."}
 
 def analyze_code_node(state: AgenticState) -> dict:
     log('INFO', "NODE[analyze_code_node]: Gemini is analyzing logs to determine root cause...")

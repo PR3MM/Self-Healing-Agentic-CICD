@@ -6,6 +6,10 @@ on:
       - completed
   workflow_dispatch:
     inputs:
+      RUN_ID:
+        description: 'Workflow run ID to diagnose (leave empty to auto-detect latest failed CI run)'
+        required: false
+        default: ''
       ALLOWED_ACTIONS:
         description: 'Comma-separated allowed actions (e.g., write_temp,create_pr)'
         required: false
@@ -49,7 +53,7 @@ jobs:
         env:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
             GITHUB_REPO: ${{ github.repository }}
-            workflow_run_id: ${{ github.event.workflow_run.id }}
+            workflow_run_id: ${{ github.event.workflow_run.id || github.event.inputs.RUN_ID || '' }}
             output_file: pipeline_doctor_report.md
             GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
             GEMINI_MODEL: gemini-3-flash-preview

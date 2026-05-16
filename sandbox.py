@@ -40,38 +40,80 @@ def inject_ai_patch(sandbox_dir, file_to_fix, patched_code_string):
         f.write(patched_code_string)
 
 # run the tests in the sandbox using Docker
+# Uses a two-phase approach:
+#   Phase 1 (network ON):  install dependencies from requirements.txt
+#   Phase 2 (network OFF): run the actual tests in isolation
 def run_tests_in_sandbox(sandbox_dir, test_command):
     client = docker.from_env()
-    
+    base_image = "python:3.11-slim"
+    tmp_image_tag = "agentic-sandbox:latest"
+
+    # ── Phase 1: Install dependencies WITH network access ──
+    req_file = os.path.join(sandbox_dir, "requirements.txt")
+    if os.path.exists(req_file):
+        print("Phase 1: Installing dependencies (network enabled)...")
+        install_cmd = "pip install --no-cache-dir -r /app/requirements.txt"
+        install_container = client.containers.run(
+            base_image,
+            command=f"sh -c '{install_cmd}'",
+            volumes={sandbox_dir: {'bind': '/app', 'mode': 'ro'}},
+            working_dir='/app',
+            detach=True,
+            network_disabled=False,  # network ON so pip can fetch packages
+        )
+        install_container.wait(timeout=120)
+        install_container.reload()
+        install_exit = install_container.attrs['State']['ExitCode']
+        install_logs = install_container.logs(stream=False).decode('utf-8')
+        print(install_logs)
+
+        if install_exit != 0:
+            install_container.remove(force=True)
+            return {
+                "success": False,
+                "logs": f"Dependency install failed:\n{install_logs}"
+            }
+
+        # Commit the container (with deps installed) as a temporary image
+        install_container.commit(repository="agentic-sandbox", tag="latest")
+        install_container.remove(force=True)
+        print("Phase 1 complete: dependencies installed.")
+    else:
+        # No requirements.txt → use the base image directly
+        tmp_image_tag = base_image
+
+    # ── Phase 2: Run tests with network DISABLED for security ──
+    print("Phase 2: Running tests (network disabled)...")
     container = client.containers.run(
-        "python:3.11-slim",
+        tmp_image_tag,
         command=test_command,
         volumes={sandbox_dir: {'bind': '/app', 'mode': 'rw'}},
         working_dir='/app',
         detach=True,
-        network_disabled=True, # disable network for security reasons
+        network_disabled=True,  # network OFF for test isolation
     )
     
-    # here first let the container run and also get some logs 
-    # if the code fails in the container, we want to see the logs to understand what went wrong
+    # Stream logs in real time and save to file
     logs = container.logs(stream=True)
-
-    # we can print logs in real time and we must also save it some where to analyze it later if needed
     for log in logs:
-        print(log.decode('utf-8')) # print logs in real time
+        print(log.decode('utf-8'))
         with open(os.path.join(sandbox_dir, 'test_logs.txt'), 'a') as log_file:
-            log_file.write(log.decode('utf-8')) # save logs to a file
+            log_file.write(log.decode('utf-8'))
     
     # Grab the logs as a single string so the AI can read it
     output_logs = container.logs(stream=False).decode('utf-8')
     
-    container.wait() # wait for the container to finish
-    container.reload() # reload the container to get the updated status and exit code
+    container.wait()
+    container.reload()
     
     exit_code = container.attrs['State']['ExitCode']
     
-    # Aggressively delete the container so we don't leak memory
+    # Clean up container and temporary image
     container.remove(force=True)
+    try:
+        client.images.remove(tmp_image_tag, force=True)
+    except Exception:
+        pass  # Cleanup is best-effort
     
     # Return a clean dictionary to the LangGraph Agent!
     return {
