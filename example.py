@@ -10,5 +10,5 @@ def fetch_status():
 
 
 def add(a, b):
-    # INTENTIONAL BUG for demo: this incorrectly subtracts instead of adding
-    return a - b
+    # Fixed: correctly adds the two numbers
+    return a + b
