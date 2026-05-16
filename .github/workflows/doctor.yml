@@ -13,7 +13,7 @@ on:
       HITL_ENABLED:
         description: 'If true, wait for manual approval marker file before creating PR'
         required: false
-        default: 'true'
+        default: 'false'
 jobs:
   doctor:
     runs-on: ubuntu-latest
@@ -72,5 +72,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: agentic-artifacts
-          path: .agentic_tmp/
+          path: .agentic_tmp
           if-no-files-found: warn
