@@ -3,12 +3,12 @@ def fetch_status():
     Naive implementation that does a network call.
     This is intentionally fragile for the demo (network disabled in sandbox).
     """
-    import requests
+    import urllib.request
 
-    resp = requests.get("https://example.com")
-    return resp.status_code
+    resp = urllib.request.urlopen("https://example.com")
+    return resp.getcode()
 
 
 def add(a, b):
-    # Fixed: correctly adds the two numbers
+    # Fixed: this now correctly adds instead of subtracting
     return a + b
