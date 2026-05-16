@@ -1,8 +1,6 @@
 from __future__ import annotations
-
 import os
 import json
-
 import time
 import re
 from pathlib import Path
@@ -41,6 +39,15 @@ AGENTIC_TMP_DIR = Path('.agentic_tmp')
 AGENTIC_TMP_DIR.mkdir(exist_ok=True)
 
 FENCE_RE = re.compile(r"```(?:json|python)?\s*(.*?)\s*```", re.S)
+
+def extract_text(response: Any) -> str:
+    content = getattr(response, 'content', str(response))
+    if isinstance(content, list):
+        return "".join(
+            item.get("text", "") if isinstance(item, dict) else str(item)
+            for item in content
+        ).strip()
+    return str(content).strip()
 
 def strip_fences(text: str) -> str:
     if not text:
@@ -236,7 +243,7 @@ def analyze_code_node(state: AgenticState) -> dict:
 
     # Use the safe invoke wrapper
     response = invoke_with_retries(prompt)
-    resp_text = getattr(response, 'content', str(response)).strip()
+    resp_text = extract_text(response)
     save_audit(state.get('iteration_count', 0), 'analyze_response', prompt, resp_text)
 
     try:
@@ -285,7 +292,7 @@ def fix_code_node(state: AgenticState) -> dict:
     """
 
     response = invoke_with_retries(prompt)
-    resp_text = getattr(response, 'content', str(response)).strip()
+    resp_text = extract_text(response)
     # strip fences if present and save audit
     cleaned = strip_fences(resp_text)
     save_audit(iteration, 'fix_response', prompt, resp_text)
@@ -344,7 +351,7 @@ def test_code_node(state: AgenticState) -> dict:
 
         try:
             r_resp = invoke_with_retries(rca_prompt)
-            r_text = getattr(r_resp, 'content', str(r_resp)).strip()
+            r_text = extract_text(r_resp)
             save_audit(iteration, 'rca_response', rca_prompt, r_text)
             rca_obj = safe_load_json(r_text)
             if validate_rca_schema(rca_obj):
