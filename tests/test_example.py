@@ -1,3 +1,4 @@
+from unittest.mock import patch, MagicMock
 from main import fetch_status, add
 
 
@@ -6,5 +7,9 @@ def test_add():
 
 
 def test_fetch_status():
-    # Expect a 200 status; will fail in sandbox (network disabled) or if requests missing
-    assert fetch_status() == 200
+    # Mock the HTTP call so this test works in any environment
+    # (sandbox with no network, CI, or local development)
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    with patch("requests.get", return_value=mock_response):
+        assert fetch_status("https://example.com") == 200
