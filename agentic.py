@@ -24,7 +24,7 @@ def log(level: str, msg: str, *args) -> None:
 
 # Load configuration from env with sane defaults
 MAX_ITERATIONS = int(os.getenv("MAX_ITERATIONS", "3"))
-MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
 TEMPERATURE = float(os.getenv("GEMINI_TEMP", "0.2"))
 # Comma-separated allowed actions for guardrails: create_pr, auto_merge, commit
 # Default: allow creating PRs (staged patches are still written locally unconditionally)
