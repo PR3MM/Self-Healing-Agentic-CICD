@@ -116,7 +116,22 @@ def run_tests_in_sandbox(sandbox_dir, test_command):
         test_container.reload()
         exit_code = test_container.attrs['State']['ExitCode']
         output_logs = "".join(output_logs_list)
-        
+
+        # Fix permissions BEFORE the container is removed so the host runner
+        # (non-root) can delete root-owned files like .pytest_cache/CACHEDIR.TAG
+        try:
+            chmod_container = client.containers.run(
+                tmp_image_tag,
+                command="chmod -R 777 /app",
+                volumes={sandbox_dir: {'bind': '/app', 'mode': 'rw'}},
+                working_dir='/app',
+                detach=False,       # run synchronously and auto-remove
+                remove=True,
+                network_disabled=True,
+            )
+        except Exception as e:
+            log('WARNING', "chmod cleanup step failed (non-fatal): %s", str(e))
+
         return {
             "success": exit_code == 0,
             "logs": output_logs
@@ -147,7 +162,9 @@ def run_tests(project_path, test_command, test_code_files, patched_code_string, 
     
     # The 'with' block acts as both your creator and your cleanup!
     # 'sandbox_dir' is now safely a string path we can use.
-    with tempfile.TemporaryDirectory() as sandbox_dir:
+    # ignore_cleanup_errors=True: if Docker left root-owned files we can't
+    # delete, swallow the error rather than crashing the entire agent.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as sandbox_dir:
         print(f"Spinning up secure sandbox at {sandbox_dir}...")
         
         # 1. Copy the broken project
