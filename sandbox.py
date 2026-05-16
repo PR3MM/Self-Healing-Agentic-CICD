@@ -2,6 +2,14 @@ import docker
 import tempfile #temp directory module
 import os 
 import shutil
+import time
+
+def log(level: str, msg: str, *args) -> None:
+    prefix = time.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        print(f"{prefix} {level}: {msg % args}")
+    except Exception:
+        print(f"{prefix} {level}: {msg}")
 
 
 
@@ -47,79 +55,86 @@ def run_tests_in_sandbox(sandbox_dir, test_command):
     client = docker.from_env()
     base_image = "python:3.11-slim"
     tmp_image_tag = "agentic-sandbox:latest"
+    
+    install_container = None
+    test_container = None
 
-    # ── Phase 1: Install dependencies WITH network access ──
-    req_file = os.path.join(sandbox_dir, "requirements.txt")
-    if os.path.exists(req_file):
-        print("Phase 1: Installing dependencies (network enabled)...")
-        install_cmd = "pip install --no-cache-dir -r /app/requirements.txt"
-        install_container = client.containers.run(
-            base_image,
-            command=f"sh -c '{install_cmd}'",
-            volumes={sandbox_dir: {'bind': '/app', 'mode': 'ro'}},
+    try:
+        # ── Phase 1: Install dependencies WITH network access ──
+        req_file = os.path.join(sandbox_dir, "requirements.txt")
+        if os.path.exists(req_file):
+            log('INFO', "Phase 1: Installing dependencies (network enabled)...")
+            install_cmd = "pip install --no-cache-dir -r /app/requirements.txt"
+            install_container = client.containers.run(
+                base_image,
+                command=f"sh -c '{install_cmd}'",
+                volumes={sandbox_dir: {'bind': '/app', 'mode': 'ro'}},
+                working_dir='/app',
+                detach=True,
+                network_disabled=False,
+            )
+            # Increased timeout to 300s for slow pip installs
+            try:
+                install_container.wait(timeout=300)
+            except Exception as e:
+                log('ERROR', "Phase 1 timed out or failed: %s", str(e))
+                return {"success": False, "logs": f"Dependency install timed out: {str(e)}"}
+
+            install_container.reload()
+            install_exit = install_container.attrs['State']['ExitCode']
+            install_logs = install_container.logs(stream=False).decode('utf-8')
+
+            if install_exit != 0:
+                return {"success": False, "logs": f"Dependency install failed:\n{install_logs}"}
+
+            install_container.commit(repository="agentic-sandbox", tag="latest")
+            log('INFO', "Phase 1 complete: dependencies installed.")
+        else:
+            tmp_image_tag = base_image
+
+        # ── Phase 2: Run tests with network DISABLED ──
+        log('INFO', "Phase 2: Running tests (network disabled)...")
+        test_container = client.containers.run(
+            tmp_image_tag,
+            command=test_command,
+            volumes={sandbox_dir: {'bind': '/app', 'mode': 'rw'}},
             working_dir='/app',
             detach=True,
-            network_disabled=False,  # network ON so pip can fetch packages
+            network_disabled=True,
         )
-        install_container.wait(timeout=120)
-        install_container.reload()
-        install_exit = install_container.attrs['State']['ExitCode']
-        install_logs = install_container.logs(stream=False).decode('utf-8')
-        print(install_logs)
+        
+        # Stream logs and capture output
+        output_logs_list = []
+        for line in test_container.logs(stream=True):
+            decoded = line.decode('utf-8')
+            print(decoded, end='')
+            output_logs_list.append(decoded)
+            with open(os.path.join(sandbox_dir, 'test_logs.txt'), 'a') as log_file:
+                log_file.write(decoded)
+        
+        test_container.wait(timeout=300)
+        test_container.reload()
+        exit_code = test_container.attrs['State']['ExitCode']
+        output_logs = "".join(output_logs_list)
+        
+        return {
+            "success": exit_code == 0,
+            "logs": output_logs
+        }
 
-        if install_exit != 0:
-            install_container.remove(force=True)
-            return {
-                "success": False,
-                "logs": f"Dependency install failed:\n{install_logs}"
-            }
-
-        # Commit the container (with deps installed) as a temporary image
-        install_container.commit(repository="agentic-sandbox", tag="latest")
-        install_container.remove(force=True)
-        print("Phase 1 complete: dependencies installed.")
-    else:
-        # No requirements.txt → use the base image directly
-        tmp_image_tag = base_image
-
-    # ── Phase 2: Run tests with network DISABLED for security ──
-    print("Phase 2: Running tests (network disabled)...")
-    container = client.containers.run(
-        tmp_image_tag,
-        command=test_command,
-        volumes={sandbox_dir: {'bind': '/app', 'mode': 'rw'}},
-        working_dir='/app',
-        detach=True,
-        network_disabled=True,  # network OFF for test isolation
-    )
-    
-    # Stream logs in real time and save to file
-    logs = container.logs(stream=True)
-    for log in logs:
-        print(log.decode('utf-8'))
-        with open(os.path.join(sandbox_dir, 'test_logs.txt'), 'a') as log_file:
-            log_file.write(log.decode('utf-8'))
-    
-    # Grab the logs as a single string so the AI can read it
-    output_logs = container.logs(stream=False).decode('utf-8')
-    
-    container.wait()
-    container.reload()
-    
-    exit_code = container.attrs['State']['ExitCode']
-    
-    # Clean up container and temporary image
-    container.remove(force=True)
-    try:
-        client.images.remove(tmp_image_tag, force=True)
-    except Exception:
-        pass  # Cleanup is best-effort
-    
-    # Return a clean dictionary to the LangGraph Agent!
-    return {
-        "success": exit_code == 0,
-        "logs": output_logs
-    }
+    finally:
+        # CRITICAL: Always remove containers before exiting the function
+        # to release file locks on the sandbox directory.
+        for c in [install_container, test_container]:
+            if c:
+                try:
+                    c.remove(force=True)
+                except Exception:
+                    pass
+        try:
+            client.images.remove(tmp_image_tag, force=True)
+        except Exception:
+            pass
         
     
     
