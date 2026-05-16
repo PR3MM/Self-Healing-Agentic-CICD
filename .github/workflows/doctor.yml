@@ -71,4 +71,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: agentic-artifacts
-          path: .agentic_tmp/**
+          path: .agentic_tmp/
+          if-no-files-found: warn
