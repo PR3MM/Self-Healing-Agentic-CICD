@@ -1,4 +1,4 @@
-from example import fetch_status, add
+from main import fetch_status, add
 
 
 def test_add():

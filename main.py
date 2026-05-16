@@ -1,7 +1,7 @@
 import requests
 
 def add(a, b):
-
+    
 
 def fetch_status(url):
     response = requests.get(url)
