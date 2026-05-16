@@ -20,6 +20,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: read
 
     # Run when triggered by a failed workflow_run OR when manually dispatched
     if: ${{ (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure') || github.event_name == 'workflow_dispatch' }}

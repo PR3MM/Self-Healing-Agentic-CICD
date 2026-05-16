@@ -223,6 +223,7 @@ class AgenticState(TypedDict):
     files_to_fix: List[str]    
     current_file: str          
     patched_code: str          
+    patched_file_path: Optional[str]
     iteration_count: int       
     success: bool                
     additional_info: Optional[str]   
