@@ -239,7 +239,59 @@ def fetch_logs_node(state: AgenticState) -> dict:
         log('INFO', "-> Fetching latest test logs from the secure Sandbox.")
         return {"logs": state["logs"]}
 
-    log('INFO', "-> Fetching initial crash logs from GitHub Actions.")
+    # Try to fetch real logs from the triggering GitHub Actions workflow run
+    workflow_run_id = os.getenv("workflow_run_id")
+    repo_full_name = os.getenv("GITHUB_REPO") or os.getenv("GITHUB_REPOSITORY")
+
+    if workflow_run_id and repo_full_name:
+        log('INFO', "-> Fetching REAL crash logs from GitHub Actions (run_id=%s)...", workflow_run_id)
+        try:
+            gh = github_client()
+            repo = gh.get_repo(repo_full_name)
+            run = repo.get_workflow_run(int(workflow_run_id))
+            # Download logs from all failed jobs
+            logs_parts = []
+            for job in run.jobs():
+                if job.conclusion == "failure":
+                    log('INFO', "-> Fetching logs for failed job: %s", job.name)
+                    # Get the log text for each failed step
+                    for step in job.steps:
+                        if step.conclusion == "failure":
+                            logs_parts.append(
+                                f"=== Job: {job.name} | Step: {step.name} ===\n"
+                                f"Status: {step.conclusion}\n"
+                            )
+            # Also get the full run logs (downloadable zip → text)
+            import requests as req
+            import zipfile
+            import io
+            token = os.getenv("GITHUB_TOKEN")
+            headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+            logs_url = f"https://api.github.com/repos/{repo_full_name}/actions/runs/{workflow_run_id}/logs"
+            resp = req.get(logs_url, headers=headers, allow_redirects=True)
+            if resp.status_code == 200:
+                z = zipfile.ZipFile(io.BytesIO(resp.content))
+                for name in z.namelist():
+                    content = z.read(name).decode("utf-8", errors="replace")
+                    # Only include test/run step logs, skip setup noise
+                    if any(kw in name.lower() for kw in ["run tests", "test", "build", "run"]):
+                        logs_parts.append(f"=== {name} ===\n{content[-3000:]}\n")
+                    elif not logs_parts:
+                        # If no keyword match, include last 2000 chars as fallback
+                        logs_parts.append(f"=== {name} ===\n{content[-2000:]}\n")
+            if logs_parts:
+                real_logs = "\n".join(logs_parts)
+                # Truncate to avoid exceeding LLM context
+                if len(real_logs) > 8000:
+                    real_logs = real_logs[-8000:]
+                log('INFO', "-> Fetched %d chars of real logs from %d log sections", len(real_logs), len(logs_parts))
+                return {"logs": real_logs}
+            else:
+                log('WARNING', "-> No failure logs found in workflow run, falling back to simulated logs.")
+        except Exception as e:
+            log('ERROR', "-> Failed to fetch real logs: %s. Falling back to simulated logs.", str(e))
+
+    log('INFO', "-> Using simulated crash logs (no workflow_run_id or fetch failed).")
     simulated_logs = """Traceback (most recent call last):
   File "app.py", line 10, in <module>
     import requests
