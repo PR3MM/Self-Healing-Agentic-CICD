@@ -346,9 +346,11 @@ def test_code_node(state: AgenticState) -> dict:
         {state.get('logs','')}
 
         PATCH (first 2000 chars):
+        {state.get('patched_code','')[:2000]}
         """
 
         try:
+            r_resp = invoke_with_retries(rca_prompt)
             r_text = extract_text(r_resp)
             save_audit(iteration, 'rca_response', rca_prompt, r_text)
             rca_obj = safe_load_json(r_text)
