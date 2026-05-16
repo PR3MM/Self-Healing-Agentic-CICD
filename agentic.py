@@ -35,7 +35,7 @@ ALLOWED_ACTIONS = set([a.strip() for a in os.getenv("ALLOWED_ACTIONS", "create_p
 llm = ChatGoogleGenerativeAI(model=MODEL_NAME, temperature=TEMPERATURE)
 
 # Directory for staging artifacts (patches, audit, RCA)
-AGENTIC_TMP_DIR = Path('.agentic_tmp')
+AGENTIC_TMP_DIR = Path('agentic_tmp')
 AGENTIC_TMP_DIR.mkdir(exist_ok=True)
 
 FENCE_RE = re.compile(r"```(?:json|python)?\s*(.*?)\s*```", re.S)
@@ -122,7 +122,8 @@ def github_client():
     token = os.getenv("GITHUB_TOKEN")
     if not token:
         raise RuntimeError("GITHUB_TOKEN is required for GitHub operations")
-    return Github(token)
+    from github import Auth
+    return Github(auth=Auth.Token(token))
 
 def create_branch_and_commit(repo_full_name: str, branch_name: str, file_path: str, file_content: str, commit_message: str):
     gh = github_client()
@@ -132,13 +133,21 @@ def create_branch_and_commit(repo_full_name: str, branch_name: str, file_path: s
     # create branch if missing
     try:
         repo.get_git_ref(f"heads/{branch_name}")
+        log('INFO', "Branch %s already exists, reusing it.", branch_name)
     except Exception:
         repo.create_git_ref(ref=f"refs/heads/{branch_name}", sha=base_ref.object.sha)
-    # create or update file on the new branch
+        log('INFO', "Created new branch %s.", branch_name)
+    # Always check the TARGET branch for existing file SHA to avoid 422 errors
+    existing_sha = None
     try:
-        existing = repo.get_contents(file_path, ref=base_branch)
-        repo.update_file(path=file_path, message=commit_message, content=file_content, sha=existing.sha, branch=branch_name)
+        existing = repo.get_contents(file_path, ref=branch_name)
+        existing_sha = existing.sha
+        log('INFO', "File %s exists on branch %s, will update it.", file_path, branch_name)
     except Exception:
+        log('INFO', "File %s not found on branch %s, will create it.", file_path, branch_name)
+    if existing_sha:
+        repo.update_file(path=file_path, message=commit_message, content=file_content, sha=existing_sha, branch=branch_name)
+    else:
         repo.create_file(path=file_path, message=commit_message, content=file_content, branch=branch_name)
 
 def open_pr_with_rca(repo_full_name: str, branch_name: str, pr_title: str, pr_body: str) -> str:
@@ -198,7 +207,7 @@ def create_pr_node(state: AgenticState) -> dict:
         return {"pr_created": False, "reason": "missing-GITHUB_REPO"}
     branch_name = f"agentic/auto-fix/iter_{iteration}"
     commit_msg = f"agentic: apply auto-fix (iter {iteration})"
-    repo_file_path = os.getenv("REPO_FILE_PATH", staged_path.name)
+    repo_file_path = os.getenv("REPO_FILE_PATH") or state.get("current_file") or staged_path.name
     try:
         log('INFO', "-> Creating branch %s and committing...", branch_name)
         create_branch_and_commit(repo_full_name, branch_name, repo_file_path, content, commit_msg)
@@ -303,15 +312,28 @@ ModuleNotFoundError: No module named 'requests'"""
 def analyze_code_node(state: AgenticState) -> dict:
     log('INFO', "NODE[analyze_code_node]: Gemini is analyzing logs to determine root cause...")
 
+    # Build a listing of repo files to help the LLM pick the correct filename
+    repo_files = []
+    try:
+        for p in Path('.').rglob('*.py'):
+            if not any(part.startswith('.') or part in ('__pycache__', '.venv', 'node_modules') for part in p.parts):
+                repo_files.append(str(p))
+    except Exception:
+        pass
+    file_listing = ', '.join(repo_files) if repo_files else 'unknown'
+
     prompt = f"""
     You are a Senior Python Developer diagnosing a CI/CD failure.
     Read the following error logs and identify which specific file needs to be fixed.
 
+    AVAILABLE FILES IN REPO: {file_listing}
+
     ERROR LOGS:
     {state['logs']}
 
+    You MUST choose the file_to_fix from the AVAILABLE FILES listed above.
     Return your analysis strictly as a JSON object with two keys:
-    1. "file_to_fix": The exact file path (e.g., "utils.py")
+    1. "file_to_fix": The exact file path from AVAILABLE FILES (e.g., "example.py")
     2. "context": A brief explanation of what is wrong.
     """
 
