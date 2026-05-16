@@ -165,32 +165,53 @@ def wait_for_approval_node(state: AgenticState) -> dict:
     return {"approved": False, "reason": "approval_timeout"}
 
 def create_pr_node(state: AgenticState) -> dict:
+    log('INFO', "NODE[create_pr_node]: Attempting to create PR...")
     if 'create_pr' not in ALLOWED_ACTIONS:
+        log('WARNING', "-> PR skipped: 'create_pr' action not allowed")
         return {"pr_created": False, "reason": "action-not-allowed"}
     iteration = state.get("iteration_count", 0)
     patched_rel = state.get("patched_file_path")
     if not patched_rel:
+        log('WARNING', "-> PR skipped: no patched file found in state")
         return {"pr_created": False, "reason": "no-patched-file"}
     # read staged file content from .agentic_tmp
     staged_path = Path(patched_rel)
     if not staged_path.exists():
+        log('WARNING', "-> PR skipped: staged file missing at %s", str(staged_path))
         return {"pr_created": False, "reason": "staged-file-missing"}
     content = staged_path.read_text()
-    repo_full_name = os.getenv("GITHUB_REPO")
+    repo_full_name = os.getenv("GITHUB_REPO") or os.getenv("GITHUB_REPOSITORY")
     if not repo_full_name:
+        try:
+            import subprocess
+            origin_url = subprocess.check_output(["git", "config", "--get", "remote.origin.url"]).decode("utf-8").strip()
+            if "github.com" in origin_url:
+                if origin_url.startswith("https://"):
+                    repo_full_name = origin_url.split("github.com/")[-1].replace(".git", "")
+                elif origin_url.startswith("git@"):
+                    repo_full_name = origin_url.split("github.com:")[-1].replace(".git", "")
+        except Exception as e:
+            log('DEBUG', "Failed to fetch repo from git origin: %s", str(e))
+            
+    if not repo_full_name:
+        log('WARNING', "-> PR skipped: GITHUB_REPO/GITHUB_REPOSITORY is missing and couldn't be detected from git")
         return {"pr_created": False, "reason": "missing-GITHUB_REPO"}
     branch_name = f"agentic/auto-fix/iter_{iteration}"
     commit_msg = f"agentic: apply auto-fix (iter {iteration})"
     repo_file_path = os.getenv("REPO_FILE_PATH", staged_path.name)
     try:
+        log('INFO', "-> Creating branch %s and committing...", branch_name)
         create_branch_and_commit(repo_full_name, branch_name, repo_file_path, content, commit_msg)
         rca_path = AGENTIC_TMP_DIR / f"iter_{iteration}_rca.json"
         rca_text = rca_path.read_text() if rca_path.exists() else "RCA not found"
         pr_title = f"agentic: auto-fix (iter {iteration})"
         pr_body = f"Automated fix from agentic (iteration {iteration})\n\nRCA:\n```\n{rca_text}\n```"
+        log('INFO', "-> Opening PR...")
         pr_url = open_pr_with_rca(repo_full_name, branch_name, pr_title, pr_body)
+        log('INFO', "-> PR successfully created: %s", pr_url)
         return {"pr_created": True, "pr_url": pr_url}
     except Exception as e:
+        log('ERROR', "-> Failed to create PR: %s", str(e))
         return {"pr_created": False, "reason": str(e)}
 
 

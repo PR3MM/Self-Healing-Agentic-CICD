@@ -47,8 +47,8 @@ jobs:
       - name: Run Pipeline Doctor
         env:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            GITHUB_REPO: ${{ github.repository }}
             workflow_run_id: ${{ github.event.workflow_run.id }}
-            ai_env_variable: ${{ secrets.AI_ENV_VARIABLE }}
             output_file: pipeline_doctor_report.md
             GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
             GEMINI_MODEL: gemini-3-flash-preview
