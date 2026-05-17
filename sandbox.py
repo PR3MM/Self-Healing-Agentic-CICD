@@ -47,6 +47,20 @@ def inject_ai_patch(sandbox_dir, file_to_fix, patched_code_string):
     with open(full_path, "w") as f:
         f.write(patched_code_string)
 
+def inject_ai_patches(sandbox_dir, patches_dict):
+    """
+    Inject ALL accumulated patches into the sandbox.
+    patches_dict: {"filepath": "patched_code", ...}
+    This ensures every fix the agent has ever made is present
+    when running tests, preventing the 'amnesia' problem.
+    """
+    for file_path, code in patches_dict.items():
+        full_path = os.path.join(sandbox_dir, file_path)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, "w") as f:
+            f.write(code)
+        log('INFO', "Injected patch for %s into sandbox", file_path)
+
 # run the tests in the sandbox using Docker
 # Uses a two-phase approach:
 #   Phase 1 (network ON):  install dependencies from requirements.txt
@@ -158,7 +172,8 @@ def clean_up_sandbox(sandbox_dir):
     shutil.rmtree(sandbox_dir)
     
 # main function to run the tests in the sandbox
-def run_tests(project_path, test_command, test_code_files, patched_code_string, file_to_fix):
+def run_tests(project_path, test_command, test_code_files=None,
+              patched_code_string=None, file_to_fix=None, patches_dict=None):
     
     # The 'with' block acts as both your creator and your cleanup!
     # 'sandbox_dir' is now safely a string path we can use.
@@ -170,8 +185,12 @@ def run_tests(project_path, test_command, test_code_files, patched_code_string, 
         # 1. Copy the broken project
         copy_project_to_sandbox(project_path, sandbox_dir)
         
-        # 2. Inject the AI's fix
-        inject_ai_patch(sandbox_dir, file_to_fix, patched_code_string) 
+        # 2. Inject patches — prefer accumulated patches_dict over single file
+        if patches_dict:
+            inject_ai_patches(sandbox_dir, patches_dict)
+        elif patched_code_string and file_to_fix:
+            # Backward compatibility: single file patch
+            inject_ai_patch(sandbox_dir, file_to_fix, patched_code_string)
         
         # 3. Run the tests and grab the dictionary
         result = run_tests_in_sandbox(sandbox_dir, test_command)
