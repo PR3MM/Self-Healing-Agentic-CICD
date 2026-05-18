@@ -10,5 +10,4 @@ def fetch_status():
 
 
 def add(a, b):
-     
     return a + b
