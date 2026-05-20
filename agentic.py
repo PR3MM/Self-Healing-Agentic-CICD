@@ -25,7 +25,7 @@ MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.5-flash") # Using flash or pro
 TEMPERATURE = float(os.getenv("GEMINI_TEMP", "0.2"))
 ALLOWED_ACTIONS = set([a.strip() for a in os.getenv("ALLOWED_ACTIONS", "create_pr").split(",") if a.strip()])
 
-llm = ChatGoogleGenerativeAI(model=MODEL_NAME, temperature=TEMPERATURE).with_retry(stop_after_attempt=3)
+llm = ChatGoogleGenerativeAI(model=MODEL_NAME, temperature=TEMPERATURE)
 
 AGENTIC_TMP_DIR = Path('agentic_tmp')
 AGENTIC_TMP_DIR.mkdir(exist_ok=True)
@@ -263,7 +263,7 @@ def analyze_code_node(state: AgenticState) -> dict:
     Analyze the logs and determine the root cause.
     """
     
-    structured_llm = llm.with_structured_output(AnalyzeOutput)
+    structured_llm = llm.with_structured_output(AnalyzeOutput).with_retry(stop_after_attempt=3)
     response = structured_llm.invoke(prompt)
     
     save_audit(state.get('iteration_count', 0), 'plan_response', prompt, str(response.dict()))
@@ -331,7 +331,7 @@ def fix_code_node(state: AgenticState) -> dict:
     Do NOT rewrite the whole file unless necessary.
     """
 
-    structured_llm = llm.with_structured_output(FixOutput)
+    structured_llm = llm.with_structured_output(FixOutput).with_retry(stop_after_attempt=3)
     response = structured_llm.invoke(prompt)
     
     save_audit(iteration, 'fix_response', prompt, str(response.dict()))
