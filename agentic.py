@@ -7,10 +7,10 @@ import ast
 from pathlib import Path
 from typing import List, Dict, Any, TypedDict, Optional
 from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import MemorySaver
 from github import Github
 from langchain_google_genai import ChatGoogleGenerativeAI
-
-# Import your sandbox
+from pydantic import BaseModel, Field
 from sandbox import run_tests
 
 def log(level: str, msg: str, *args) -> None:
@@ -25,51 +25,25 @@ MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.5-flash") # Using flash or pro
 TEMPERATURE = float(os.getenv("GEMINI_TEMP", "0.2"))
 ALLOWED_ACTIONS = set([a.strip() for a in os.getenv("ALLOWED_ACTIONS", "create_pr").split(",") if a.strip()])
 
-llm = ChatGoogleGenerativeAI(model=MODEL_NAME, temperature=TEMPERATURE)
+llm = ChatGoogleGenerativeAI(model=MODEL_NAME, temperature=TEMPERATURE).with_retry(stop_after_attempt=3)
 
 AGENTIC_TMP_DIR = Path('agentic_tmp')
 AGENTIC_TMP_DIR.mkdir(exist_ok=True)
 
-FENCE_RE = re.compile(r"```(?:json|python)?\s*(.*?)\s*```", re.S)
+class AnalyzeOutput(BaseModel):
+    failure_summary: str = Field(description="Short description of the error")
+    root_cause: str = Field(description="Detailed explanation of why it failed")
+    target_file: str = Field(description="The EXACT file path from AVAILABLE FILES to fix")
+    repair_strategy: str = Field(description="Step-by-step plan to fix it")
+    confidence: float = Field(description="0.0 to 1.0 confidence score")
 
-def extract_text(response: Any) -> str:
-    content = getattr(response, 'content', str(response))
-    if isinstance(content, list):
-        return "".join(
-            item.get("text", "") if isinstance(item, dict) else str(item)
-            for item in content
-        ).strip()
-    return str(content).strip()
+class EditChunk(BaseModel):
+    start_line: int = Field(description="1-indexed start line")
+    end_line: int = Field(description="1-indexed inclusive end line")
+    replacement: str = Field(description="New code for these lines")
 
-def strip_fences(text: str) -> str:
-    if not text:
-        return text
-    m = FENCE_RE.search(text)
-    return m.group(1).strip() if m else text.strip()
-
-def safe_load_json(text: str) -> Any:
-    text = strip_fences(text)
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find('{')
-        end = text.rfind('}')
-        if start != -1 and end != -1 and end > start:
-            try:
-                return json.loads(text[start:end+1])
-            except json.JSONDecodeError:
-                pass
-    raise ValueError("Could not parse JSON from LLM output")
-
-def invoke_with_retries(prompt: str, retries: int = 3, delay: float = 1.0) -> Any:
-    last_exc = None
-    for attempt in range(1, retries + 1):
-        try:
-            return llm.invoke(prompt)
-        except Exception as e:
-            last_exc = e
-            time.sleep(delay * attempt)
-    raise last_exc
+class FixOutput(BaseModel):
+    edits: List[EditChunk] = Field(description="List of surgical edits")
 
 def save_audit(iteration: int, name: str, prompt: str, response_text: str) -> Path:
     path = AGENTIC_TMP_DIR / f"iter_{iteration}_{name}.json"
@@ -286,24 +260,17 @@ def analyze_code_node(state: AgenticState) -> dict:
     PAST REPAIR ATTEMPTS (Do not repeat failed strategies):
     {iterations_history}
 
-    Analyze the logs and return a JSON object with:
-    {{
-      "failure_summary": "Short description of the error",
-      "root_cause": "Detailed explanation of why it failed",
-      "target_file": "The EXACT file path from AVAILABLE FILES to fix",
-      "repair_strategy": "Step-by-step plan to fix it",
-      "confidence": 0.0 to 1.0
-    }}
+    Analyze the logs and determine the root cause.
     """
     
-    response = invoke_with_retries(prompt)
-    resp_text = extract_text(response)
-    save_audit(state.get('iteration_count', 0), 'plan_response', prompt, resp_text)
+    structured_llm = llm.with_structured_output(AnalyzeOutput)
+    response = structured_llm.invoke(prompt)
+    
+    save_audit(state.get('iteration_count', 0), 'plan_response', prompt, str(response.dict()))
 
     try:
-        analysis = safe_load_json(resp_text)
-        target_file = analysis.get("target_file", "")
-        repair_strategy = analysis.get("repair_strategy", "")
+        target_file = response.target_file
+        repair_strategy = response.repair_strategy
         
         # Track attempted files
         if target_file and target_file not in repair_memory["context"]["files_attempted"]:
@@ -361,25 +328,16 @@ def fix_code_node(state: AgenticState) -> dict:
     CURRENT CODE ({current_file}):
     {broken_code}
 
-    Return ONLY a JSON object with your surgical edits. Do NOT rewrite the whole file unless necessary.
-    {{
-      "edits": [
-        {{
-          "start_line": <int> (1-indexed),
-          "end_line": <int> (1-indexed, inclusive),
-          "replacement": "<new code for these lines>"
-        }}
-      ]
-    }}
+    Do NOT rewrite the whole file unless necessary.
     """
 
-    response = invoke_with_retries(prompt)
-    resp_text = extract_text(response)
-    save_audit(iteration, 'fix_response', prompt, resp_text)
+    structured_llm = llm.with_structured_output(FixOutput)
+    response = structured_llm.invoke(prompt)
+    
+    save_audit(iteration, 'fix_response', prompt, str(response.dict()))
 
     try:
-        edits_json = safe_load_json(resp_text)
-        edits = edits_json.get("edits", [])
+        edits = [e.dict() for e in response.edits]
         
         # Apply the edits programmatically
         patched_code = apply_edits(broken_code, edits)
@@ -399,20 +357,7 @@ def fix_code_node(state: AgenticState) -> dict:
         log('INFO', "-> Applied %d edits to %s", len(edits), current_file)
         
     except Exception as e:
-        log('ERROR', "Failed to apply surgical edits, falling back to original code: %s", str(e))
-        # If it hallucinates non-JSON, we might try to save it directly if it looks like code
-        raw = strip_fences(resp_text)
-        if "def " in raw or "import " in raw or "class " in raw:
-             repo_state[current_file] = raw
-             log('INFO', "-> Fallback: Applied raw code block to %s", current_file)
-             repair_memory["iterations"].append({
-                 "iteration": iteration + 1,
-                 "target_file": current_file,
-                 "strategy": state.get("repair_strategy"),
-                 "edits_applied": "Raw file rewrite fallback",
-                 "result": "pending",
-                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")
-             })
+        log('ERROR', "Failed to apply surgical edits: %s", str(e))
 
     repair_memory["repo_state"] = repo_state
     
@@ -493,43 +438,33 @@ def generate_rca_node(state: AgenticState) -> dict:
     # 2. HTML Report
     html_content = f"""
     <html>
-    <head><title>Pipeline Doctor Report</title><style>body{{font-family:sans-serif;}} .iter{{border:1px solid #ccc; margin:10px; padding:10px;}}</style></head>
+    <head>
+        <title>Pipeline Doctor Report</title>
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@1/css/pico.min.css">
+        <style>body{{padding: 20px;}} .iter{{margin-top: 20px;}} .badge{{padding: 5px 10px; border-radius: 5px; color: white;}} .badge.Success{{background: #28a745;}} .badge.Failed{{background: #dc3545;}}</style>
+    </head>
     <body>
+    <main class="container">
     <h1>Pipeline Doctor - Repair Timeline</h1>
-    <h3>Status: {rca_obj['final_status']}</h3>
-    <p>Files Patched: {', '.join(rca_obj['files_modified'])}</p>
+    <h3>Status: <span class="badge {rca_obj['final_status']}">{rca_obj['final_status']}</span></h3>
+    <p><strong>Files Patched:</strong> {', '.join(rca_obj['files_modified'])}</p>
     """
     for it in iterations:
+        result_badge = "Success" if it.get('result') == 'passed' else "Failed"
         html_content += f"""
-        <div class='iter'>
-            <h4>Iteration {it.get('iteration')} - {it.get('target_file')}</h4>
+        <article class='iter'>
+            <header><h4>Iteration {it.get('iteration')} - {it.get('target_file')}</h4></header>
             <p><b>Strategy:</b> {it.get('strategy')}</p>
-            <p><b>Result:</b> {it.get('result')} ({it.get('reason')})</p>
-        </div>
+            <p><b>Result:</b> <span class="badge {result_badge}">{it.get('result')}</span> ({it.get('reason')})</p>
+        </article>
         """
-    html_content += "</body></html>"
+    html_content += "</main></body></html>"
     
     html_path = AGENTIC_TMP_DIR / "report.html"
     html_path.write_text(html_content)
     
     log('INFO', "-> RCA and HTML report generated.")
     return {"rca_path": str(rca_path), "rca_html_path": str(html_path)}
-
-def wait_for_approval_node(state: AgenticState) -> dict:
-    hitl = os.getenv("HITL_ENABLED", "true").lower() == "true"
-    if not hitl:
-        return {"approved": True}
-    iteration = state.get("iteration_count", 0)
-    marker = AGENTIC_TMP_DIR / f"iter_{iteration}" / "approved"
-    timeout = int(os.getenv("HITL_TIMEOUT_SEC", "600"))
-    interval = 5
-    waited = 0
-    while waited < timeout:
-        if marker.exists():
-            return {"approved": True}
-        time.sleep(interval)
-        waited += interval
-    return {"approved": False}
 
 def create_pr_node(state: AgenticState) -> dict:
     log('INFO', "NODE[create_pr_node]: Creating PR with ALL patches...")
@@ -550,11 +485,28 @@ def create_pr_node(state: AgenticState) -> dict:
     try:
         create_branch_and_commit_multiple(repo_full_name, branch_name, repo_state, commit_msg)
         
-        pr_title = "agentic: Pipeline Auto-Fix"
-        pr_body = "## Automated fix from Pipeline Doctor\n\nFixed files:\n"
+        iterations = state.get("repair_memory", {}).get("iterations", [])
+        last_iter = iterations[-1] if iterations else {}
+        target_file = last_iter.get("target_file", "multiple files")
+        strategy = last_iter.get("strategy", "Automated code repair")
+
+        pr_title = f"Pipeline Doctor: Auto-fix for {target_file}"
+        pr_body = f"""## 🚨 Pipeline Doctor Automated Repair
+
+**Root Cause & Strategy:**
+{strategy}
+
+**Files Modified:**
+"""
         for f in repo_state.keys():
             pr_body += f"- `{f}`\n"
-        pr_body += "\n_Check the attached HTML report artifact for the full repair timeline._"
+            
+        pr_body += """
+✅ **Sandbox Verification:**
+The agent successfully tested this patch in an isolated Docker sandbox. All tests passed!
+
+_Check the attached HTML report artifact for the full repair timeline and visualizations._
+"""
         
         pr_url = open_pr_with_rca(repo_full_name, branch_name, pr_title, pr_body)
         log('INFO', "-> PR created: %s", pr_url)
@@ -584,13 +536,9 @@ def route_after_test(state: AgenticState) -> str:
         return "analyze_code"
 
 def route_after_rca(state: AgenticState) -> str:
-    # If hitl is enabled and it was successful
     if state.get("success"):
-        return "wait_for_approval"
+        return "create_pr"
     return END
-
-def route_after_approval(state: AgenticState) -> str:
-    return "create_pr" if state.get("approved", False) else END
 
 agent_builder = StateGraph(AgenticState)
 
@@ -600,7 +548,6 @@ agent_builder.add_node("fix_code", fix_code_node)
 agent_builder.add_node("lint_check", lint_check_node)
 agent_builder.add_node("test_code", test_code_node)
 agent_builder.add_node("generate_rca", generate_rca_node)
-agent_builder.add_node("wait_for_approval", wait_for_approval_node)
 agent_builder.add_node("create_pr", create_pr_node)
 
 agent_builder.add_edge(START, "fetch_logs")
@@ -611,13 +558,51 @@ agent_builder.add_edge("fix_code", "lint_check")
 agent_builder.add_conditional_edges("lint_check", route_after_lint)
 agent_builder.add_conditional_edges("test_code", route_after_test)
 agent_builder.add_conditional_edges("generate_rca", route_after_rca)
-agent_builder.add_conditional_edges("wait_for_approval", route_after_approval)
 agent_builder.add_edge("create_pr", END)
 
-agentic_graph = agent_builder.compile()
+hitl = os.getenv("HITL_ENABLED", "true").lower() == "true"
+memory = MemorySaver()
+interrupts = ["create_pr"] if hitl else []
+agentic_graph = agent_builder.compile(checkpointer=memory, interrupt_before=interrupts)
 
 if __name__ == "__main__":
+    # Generate Agentic Flow Visualization
+    try:
+        mermaid_graph = agentic_graph.get_graph().draw_mermaid()
+        mermaid_path = AGENTIC_TMP_DIR / "agent_flow.mermaid"
+        mermaid_path.write_text(mermaid_graph)
+        log('INFO', f"Agent workflow visualization saved to {mermaid_path}")
+    except Exception as e:
+        log('WARNING', f"Could not generate mermaid graph: {e}")
+
     log('INFO', "🚀 Starting Pipeline Doctor Agent v2 (powered by LLM)...")
     initial_state = {"iteration_count": 0, "success": False, "logs": ""}
-    for step in agentic_graph.stream(initial_state):
+    thread_config = {"configurable": {"thread_id": "1"}}
+    
+    for step in agentic_graph.stream(initial_state, config=thread_config):
         pass
+
+    # If HITL Breakpoint was hit, wait for manual marker file and resume
+    if hitl:
+        state = agentic_graph.get_state(thread_config)
+        if state.next and "create_pr" in state.next:
+            log('INFO', "⏸️ Graph execution paused for Human-in-the-Loop approval before creating PR.")
+            timeout = int(os.getenv("HITL_TIMEOUT_SEC", "600"))
+            interval = 5
+            waited = 0
+            approved = False
+            iteration = state.values.get("iteration_count", 0)
+            marker = AGENTIC_TMP_DIR / f"iter_{iteration}" / "approved"
+            while waited < timeout:
+                if marker.exists():
+                    approved = True
+                    break
+                time.sleep(interval)
+                waited += interval
+            
+            if approved:
+                log('INFO', "▶️ Approval received. Resuming graph execution...")
+                for step in agentic_graph.stream(None, config=thread_config):
+                    pass
+            else:
+                log('INFO', "Approval timed out. PR not created.")
