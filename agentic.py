@@ -5,6 +5,9 @@ import time
 import re
 import ast
 from pathlib import Path
+import difflib
+import io
+import zipfile
 from typing import List, Dict, Any, TypedDict, Optional
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
@@ -475,46 +478,106 @@ def generate_rca_node(state: AgenticState) -> dict:
     log('INFO', "NODE[generate_rca_node]: Generating RCA and HTML Report...")
     repair_memory = state.get("repair_memory", {})
     iterations = repair_memory.get("iterations", [])
-    
-    # 1. JSON RCA for PR body
+    # 1. JSON RCA for programmatic consumption
     rca_obj = {
         "summary": "Automated pipeline repair",
         "iterations_taken": len(iterations),
         "files_modified": list(repair_memory.get("repo_state", {}).keys()),
-        "final_status": "Success" if state.get("success") else "Max Iterations Reached"
+        "final_status": "Success" if state.get("success") else "Max Iterations Reached",
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     rca_path = AGENTIC_TMP_DIR / "final_rca.json"
     rca_path.write_text(json.dumps(rca_obj, indent=2))
-    
-    # 2. HTML Report
-    html_content = f"""
-    <head>
-        <title>Pipeline Doctor Report</title>
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@1/css/pico.min.css">
-        <style>body{{padding: 20px;}} .iter{{margin-top: 20px;}} .badge{{padding: 5px 10px; border-radius: 5px; color: white;}} .badge.Success{{background: #28a745;}} .badge.Failed{{background: #dc3545;}}</style>
-    </head>
-    <body>
-    <main class="container">
-    <h1>Pipeline Doctor - Repair Timeline</h1>
-    <h3>Status: <span class="badge {rca_obj['final_status']}">{rca_obj['final_status']}</span></h3>
-    <p><strong>Files Patched:</strong> {', '.join(rca_obj['files_modified'])}</p>
-    """
-    for it in iterations:
-        result_badge = "Success" if it.get('result') == 'passed' else "Failed"
-        html_content += f"""
-        <article class='iter'>
-            <header><h4>Iteration {it.get('iteration')} - {it.get('target_file')}</h4></header>
-            <p><b>Strategy:</b> {it.get('strategy')}</p>
-            <p><b>Result:</b> <span class="badge {result_badge}">{it.get('result')}</span> ({it.get('reason')})</p>
-        </article>
+
+    # 2. Create patch.diff (unified diff) and patched_files.zip
+    repo_state = repair_memory.get("repo_state", {}) or {}
+    diff_parts = []
+    patched_zip_path = AGENTIC_TMP_DIR / "patched_files.zip"
+    with zipfile.ZipFile(patched_zip_path, 'w') as zf:
+        for file_path, patched_code in repo_state.items():
+            try:
+                orig_text = Path(file_path).read_text()
+            except Exception:
+                orig_text = ""
+            # Generate unified diff
+            diff = difflib.unified_diff(
+                orig_text.splitlines(keepends=True),
+                patched_code.splitlines(keepends=True),
+                fromfile=f"a/{file_path}",
+                tofile=f"b/{file_path}",
+                lineterm=""
+            )
+            diff_text = "".join(list(diff))
+            if diff_text:
+                diff_parts.append(diff_text)
+            # Add patched file to zip
+            zf.writestr(file_path, patched_code)
+
+        patch_path = AGENTIC_TMP_DIR / "patch.diff"
+        patch_path.write_text("\n\n".join(diff_parts) or "")
+
+        # 3. Simple black & white HTML report (no AI generation)
+        files_modified_html = "".join([f"<li>{f}</li>" for f in rca_obj["files_modified"]]) if rca_obj["files_modified"] else "<li>None</li>"
+        html_content = f"""
+        <!doctype html>
+        <html>
+        <head>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width,initial-scale=1" />
+            <title>Pipeline Doctor Report</title>
+            <style>
+                body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; color: #000; background: #fff; margin: 24px; }}
+                h1 {{ margin-bottom: 4px; }}
+                .meta {{ color: #333; font-size: 90%; margin-bottom: 12px; }}
+                .card {{ border: 1px solid #ddd; padding: 14px; margin-bottom: 12px; background: #fff; }}
+                pre {{ background: #f8f8f8; padding: 10px; overflow: auto; border: 1px solid #e6e6e6; }}
+                .muted {{ color: #666; font-size: 90%; }}
+                a {{ color: #000; text-decoration: underline; }}
+            </style>
+        </head>
+        <body>
+            <h1>Pipeline Doctor Report</h1>
+            <div class="meta">Generated: {rca_obj['timestamp']}</div>
+
+            <div class="card">
+                <h2>Summary</h2>
+                <p><strong>Status:</strong> {rca_obj['final_status']}</p>
+                <p><strong>Iterations:</strong> {rca_obj['iterations_taken']}</p>
+                <p><strong>Files Modified:</strong></p>
+                <ul>
+                    {files_modified_html}
+                </ul>
+            </div>
+
+            <div class="card">
+                <h2>Iteration Timeline</h2>
+                {''.join([f"<div style=\"margin-bottom:10px;\"><strong>Iteration {it.get('iteration')} — {it.get('target_file')}</strong><div class=\"muted\">Strategy: {it.get('strategy')}</div><pre>{json.dumps(it.get('edits_applied', []), indent=2)}</pre><div class=\"muted\">Result: {it.get('result')} {it.get('reason') or ''}</div></div>" for it in iterations]) or '<p>No iterations recorded.</p>'}
+            </div>
+
+            <div class="card">
+                <h2>Artifacts</h2>
+                <ul>
+                    <li><a href="final_rca.json">final_rca.json</a></li>
+                    <li><a href="report.html">report.html</a> (this file)</li>
+                    <li><a href="patch.diff">patch.diff</a></li>
+                    <li><a href="patched_files.zip">patched_files.zip</a></li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h2>Reproduction</h2>
+                <pre>python -m pytest tests/ -q</pre>
+            </div>
+
+        </body>
+        </html>
         """
-    html_content += "</main></body></html>"
-    
-    html_path = AGENTIC_TMP_DIR / "report.html"
-    html_path.write_text(html_content)
-    
-    log('INFO', "-> RCA and HTML report generated.")
-    return {"rca_path": str(rca_path), "rca_html_path": str(html_path)}
+
+        html_path = AGENTIC_TMP_DIR / "report.html"
+        html_path.write_text(html_content)
+
+        log('INFO', "-> RCA, patch.diff and patched_files.zip generated.")
+        return {"rca_path": str(rca_path), "rca_html_path": str(html_path), "patch_path": str(patch_path), "patched_zip": str(patched_zip_path)}
 
 def create_pr_node(state: AgenticState) -> dict:
     log('INFO', "NODE[create_pr_node]: Creating PR with ALL patches...")
@@ -611,14 +674,8 @@ memory = MemorySaver()
 agentic_graph = agent_builder.compile(checkpointer=memory)
 
 if __name__ == "__main__":
-    # Generate Agentic Flow Visualization
-    try:
-        mermaid_graph = agentic_graph.get_graph().draw_mermaid()
-        mermaid_path = AGENTIC_TMP_DIR / "agent_flow.mermaid"
-        mermaid_path.write_text(mermaid_graph)
-        log('INFO', f"Agent workflow visualization saved to {mermaid_path}")
-    except Exception as e:
-        log('WARNING', f"Could not generate mermaid graph: {e}")
+    # Agent flow visualization generation disabled to reduce artifact noise
+    log('INFO', "Agent flow mermaid generation disabled (artifact noise reduction).")
 
     log('INFO', "🚀 Starting Pipeline Doctor Agent v2 (powered by LLM)...")
     initial_state = {"iteration_count": 0, "success": False, "logs": ""}
