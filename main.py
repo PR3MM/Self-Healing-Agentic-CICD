@@ -1,11 +1,9 @@
 import requests
 
-def add(a, b,c):
+def add(a, b):
+    return a + b
 
 
-
-    
-    
 
 
 def fetch_status(url):
