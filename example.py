@@ -9,6 +9,5 @@ def fetch_status():
     return resp.getcode()
 
 
-def add(a, b):
-     
-    return a + b
+def add(a, b, c=0, d=0, e=0):
+    return a + b + c + d + e
