@@ -15,7 +15,11 @@ on:
         required: false
         default: 'create_pr'
       HITL_ENABLED:
-        description: 'If true, wait for manual approval marker file before creating PR'
+        description: 'If true, create a PR and require human review (no auto-merge)'
+        required: false
+        default: 'false'
+      AUTO_MERGE:
+        description: 'If true and HITL is false, agent may auto-merge when checks pass'
         required: false
         default: 'false'
 jobs:
@@ -54,18 +58,13 @@ jobs:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
             GITHUB_REPO: ${{ github.repository }}
             workflow_run_id: ${{ github.event.workflow_run.id || github.event.inputs.RUN_ID || '' }}
-            output_file: pipeline_doctor_report.md
             GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
             GEMINI_MODEL: gemini-3-flash-preview
             GEMINI_TEMP: '0.2'
             ALLOWED_ACTIONS: ${{ github.event.inputs.ALLOWED_ACTIONS || 'create_pr' }}
             HITL_ENABLED: ${{ github.event.inputs.HITL_ENABLED || 'false' }}
-            # Label or comment the PR with this label to signal approval when HITL is enabled
-            AGENTIC_APPROVAL_LABEL: 'agentic-approved'
-            # Comma-separated usernames allowed to approve (optional)
-            AGENTIC_APPROVERS: ''
-            # If true (opt-in), agent may auto-merge after approval; default false
-            AUTO_MERGE: 'true'
+            # If true and HITL is false, agent may auto-merge when checks pass
+            AUTO_MERGE: ${{ github.event.inputs.AUTO_MERGE || 'false' }}
         run: python agentic.py
       - name: List staged artifacts
         if: always()
