@@ -3,7 +3,7 @@ from main import fetch_status, add
 
 
 def test_add():
-    assert add(2, 3) == 5
+    assert add(2, 3, 0, 0, 0) == 5
 
 
 def test_fetch_status():
