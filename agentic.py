@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List, Dict, Any, TypedDict, Optional
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
-from github import Github
+from github import Github, InputGitTreeElement
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 from sandbox import run_tests
@@ -118,43 +118,42 @@ def github_client():
     return Github(auth=Auth.Token(token))
 
 def create_branch_and_commit_multiple(repo_full_name: str, branch_name: str, patches_dict: dict, commit_message: str):
-    gh = github_client()
-    repo = gh.get_repo(repo_full_name)
-    base_branch = GITHUB_BASE_BRANCH
-
-    # Get the latest commit on the base branch
-    base_ref = repo.get_git_ref(f"heads/{base_branch}")
-    base_commit_sha = base_ref.object.sha
-    base_commit = repo.get_git_commit(base_commit_sha)
-
-    # Create blobs for each file and prepare tree items
-    tree_items = []
-    for file_path, file_content in patches_dict.items():
-        blob = repo.create_git_blob(file_content, "utf-8")
-        tree_items.append({
-            "path": file_path,
-            "mode": "100644",
-            "type": "blob",
-            "sha": blob.sha,
-        })
-
-    # Create a new tree based on the base commit's tree
-    base_tree_sha = base_commit.tree.sha
-    new_tree = repo.create_git_tree(tree_items, base_tree=base_tree_sha)
-
-    # Create a new commit pointing to the new tree
-    new_commit = repo.create_git_commit(commit_message, new_tree, [base_commit_sha])
-
-    # Delete existing branch ref if present, then create a new ref pointing to the new commit
     try:
-        existing_ref = repo.get_git_ref(f"heads/{branch_name}")
-        existing_ref.delete()
-        log('INFO', "Deleted stale branch %s.", branch_name)
-    except Exception:
-        pass
+        gh = github_client()
+        repo = gh.get_repo(repo_full_name)
+        base_branch = GITHUB_BASE_BRANCH
 
-    repo.create_git_ref(ref=f"refs/heads/{branch_name}", sha=new_commit.sha)
-    log('INFO', "Created branch %s -> commit %s from base %s.", branch_name, new_commit.sha, base_branch)
+        # Get the latest commit on the base branch
+        base_ref = repo.get_git_ref(f"heads/{base_branch}")
+        base_commit_sha = base_ref.object.sha
+        base_commit = repo.get_git_commit(base_commit_sha)
+
+        # Create blobs for each file and prepare tree items
+        tree_items = []
+        for file_path, file_content in patches_dict.items():
+            blob = repo.create_git_blob(file_content, "utf-8")
+            tree_items.append(InputGitTreeElement(path=file_path, mode='100644', type='blob', sha=blob.sha))
+
+        # Create a new tree based on the base commit's tree
+        base_tree_sha = base_commit.tree.sha
+        new_tree = repo.create_git_tree(tree_items, base_tree=base_tree_sha)
+
+        # Create a new commit pointing to the new tree
+        new_commit = repo.create_git_commit(commit_message, new_tree, [base_commit])
+
+        # Delete existing branch ref if present, then create a new ref pointing to the new commit
+        try:
+            existing_ref = repo.get_git_ref(f"heads/{branch_name}")
+            existing_ref.delete()
+            log('INFO', "Deleted stale branch %s.", branch_name)
+        except Exception:
+            pass
+
+        repo.create_git_ref(ref=f"refs/heads/{branch_name}", sha=new_commit.sha)
+        log('INFO', "Created branch %s -> commit %s from base %s.", branch_name, new_commit.sha, base_branch)
+        log('INFO', 'Created branch %s, now opening PR...', branch_name)
+    except Exception as e:
+        log('ERROR', 'create_branch_and_commit_multiple failed: %s', str(e))
 
 def open_pr_with_rca(repo_full_name: str, branch_name: str, pr_title: str, pr_body: str, draft: bool = False):
     gh = github_client()
@@ -336,7 +335,7 @@ def analyze_code_node(state: AgenticState) -> dict:
     structured_llm = llm.with_structured_output(AnalyzeOutput).with_retry(stop_after_attempt=3)
     response = structured_llm.invoke(prompt)
     
-    save_audit(state.get('iteration_count', 0), 'plan_response', prompt, str(response.dict()))
+    save_audit(state.get('iteration_count', 0), 'plan_response', prompt, str(response.model_dump()))
 
     try:
         target_file = response.target_file
@@ -403,11 +402,11 @@ def fix_code_node(state: AgenticState) -> dict:
 
     structured_llm = llm.with_structured_output(FixOutput).with_retry(stop_after_attempt=3)
     response = structured_llm.invoke(prompt)
-    
-    save_audit(iteration, 'fix_response', prompt, str(response.dict()))
+
+    save_audit(iteration, 'fix_response', prompt, str(response.model_dump()))
 
     try:
-        edits = [e.dict() for e in response.edits]
+        edits = [e.model_dump() for e in response.edits]
         
         # Apply the edits programmatically
         patched_code = apply_edits(broken_code, edits)
@@ -507,7 +506,6 @@ def generate_rca_node(state: AgenticState) -> dict:
     
     # 2. HTML Report
     html_content = f"""
-    <html>
     <head>
         <title>Pipeline Doctor Report</title>
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@1/css/pico.min.css">
