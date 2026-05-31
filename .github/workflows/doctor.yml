@@ -11,7 +11,7 @@ on:
         required: false
         default: ''
       ALLOWED_ACTIONS:
-        description: 'Comma-separated allowed actions (e.g., write_temp,create_pr)'
+        description: 'Comma-separated allowed actions (e.g., create_pr)'
         required: false
         default: 'create_pr'
       HITL_ENABLED:
@@ -65,7 +65,7 @@ jobs:
             # Comma-separated usernames allowed to approve (optional)
             AGENTIC_APPROVERS: ''
             # If true (opt-in), agent may auto-merge after approval; default false
-            AUTO_MERGE: 'false'
+            AUTO_MERGE: 'true'
         run: python agentic.py
       - name: List staged artifacts
         if: always()

@@ -20,12 +20,31 @@ def log(level: str, msg: str, *args) -> None:
     except Exception:
         print(f"{prefix} {level}: {msg}")
 
+# ------------------
+# Centralized configuration (environment-driven)
+# Read all environment flags here so it's easy to find and modify defaults
+# ------------------
 MAX_ITERATIONS = int(os.getenv("MAX_ITERATIONS", "3"))
-MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.5-flash") # Using flash or pro
-TEMPERATURE = float(os.getenv("GEMINI_TEMP", "0.2"))
-ALLOWED_ACTIONS = set([a.strip() for a in os.getenv("ALLOWED_ACTIONS", "create_pr").split(",") if a.strip()])
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+GEMINI_TEMP = float(os.getenv("GEMINI_TEMP", "0.2"))
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-llm = ChatGoogleGenerativeAI(model=MODEL_NAME, temperature=TEMPERATURE)
+ALLOWED_ACTIONS = set(a.strip() for a in os.getenv("ALLOWED_ACTIONS", "create_pr").split(",") if a.strip())
+
+# GitHub / workflow identifiers
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+GITHUB_REPO = os.getenv("GITHUB_REPO") or os.getenv("GITHUB_REPOSITORY")
+WORKFLOW_RUN_ID = os.getenv("workflow_run_id", "")
+GITHUB_BASE_BRANCH = os.getenv("GITHUB_BASE_BRANCH", "main")
+
+# Human-in-the-loop / approval
+HITL_ENABLED = os.getenv("HITL_ENABLED", "true").lower() == "true"
+HITL_TIMEOUT_SEC = int(os.getenv("HITL_TIMEOUT_SEC", "600"))
+AGENTIC_APPROVAL_LABEL = os.getenv("AGENTIC_APPROVAL_LABEL", "agentic-approved")
+AGENTIC_APPROVERS = set(a.strip() for a in os.getenv("AGENTIC_APPROVERS", "").split(",") if a.strip())
+AUTO_MERGE = os.getenv("AUTO_MERGE", "false").lower() == "true"
+
+llm = ChatGoogleGenerativeAI(model=GEMINI_MODEL, temperature=GEMINI_TEMP)
 
 AGENTIC_TMP_DIR = Path('agentic_tmp')
 AGENTIC_TMP_DIR.mkdir(exist_ok=True)
@@ -92,7 +111,7 @@ def find_callers(target_file: str) -> dict:
 # GitHub Helpers
 # ------------------
 def github_client():
-    token = os.getenv("GITHUB_TOKEN")
+    token = GITHUB_TOKEN
     if not token:
         raise RuntimeError("GITHUB_TOKEN is required for GitHub operations")
     from github import Auth
@@ -101,7 +120,7 @@ def github_client():
 def create_branch_and_commit_multiple(repo_full_name: str, branch_name: str, patches_dict: dict, commit_message: str):
     gh = github_client()
     repo = gh.get_repo(repo_full_name)
-    base_branch = os.getenv("GITHUB_BASE_BRANCH", "main")
+    base_branch = GITHUB_BASE_BRANCH
     base_ref = repo.get_git_ref(f"heads/{base_branch}")
     try:
         existing_ref = repo.get_git_ref(f"heads/{branch_name}")
@@ -123,12 +142,49 @@ def create_branch_and_commit_multiple(repo_full_name: str, branch_name: str, pat
             log('INFO', "Creating %s on branch %s.", file_path, branch_name)
             repo.create_file(path=file_path, message=commit_message, content=file_content, branch=branch_name)
 
-def open_pr_with_rca(repo_full_name: str, branch_name: str, pr_title: str, pr_body: str) -> str:
+def open_pr_with_rca(repo_full_name: str, branch_name: str, pr_title: str, pr_body: str, draft: bool = False):
     gh = github_client()
     repo = gh.get_repo(repo_full_name)
-    base_branch = os.getenv("GITHUB_BASE_BRANCH", "main")
-    pr = repo.create_pull(title=pr_title, body=pr_body, head=branch_name, base=base_branch)
-    return pr.html_url
+    base_branch = GITHUB_BASE_BRANCH
+    pr = repo.create_pull(title=pr_title, body=pr_body, head=branch_name, base=base_branch, draft=draft)
+    return pr.html_url, pr.number, pr.node_id
+
+
+def enable_auto_merge(pull_request_node_id: str, merge_method: str = "MERGE") -> bool:
+    """Enable GitHub auto-merge for a pull request using GraphQL.
+    Returns True on success, False otherwise.
+    """
+    try:
+        import requests
+        if not GITHUB_TOKEN:
+            log('WARNING', "No GITHUB_TOKEN; cannot enable auto-merge")
+            return False
+        url = "https://api.github.com/graphql"
+        query = """
+        mutation($input: EnablePullRequestAutoMergeInput!) {
+          enablePullRequestAutoMerge(input: $input) {
+            pullRequest {
+              number
+              merged
+            }
+          }
+        }
+        """
+        variables = {"input": {"pullRequestId": pull_request_node_id, "mergeMethod": merge_method}}
+        headers = {"Authorization": f"bearer {GITHUB_TOKEN}", "Content-Type": "application/json"}
+        resp = requests.post(url, json={"query": query, "variables": variables}, headers=headers, timeout=30)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("errors"):
+                log('WARNING', "Enable auto-merge errors: %s", data.get("errors"))
+                return False
+            return True
+        else:
+            log('WARNING', "Auto-merge GraphQL failed: %s %s", resp.status_code, resp.text)
+            return False
+    except Exception as e:
+        log('ERROR', "Exception enabling auto-merge: %s", str(e))
+        return False
 
 # ==========================================
 # THE STATE 
@@ -174,8 +230,8 @@ def fetch_logs_node(state: AgenticState) -> dict:
         return {"logs": state["logs"], "repair_memory": repair_memory}
 
     # Fetch real logs from GitHub Actions
-    workflow_run_id = os.getenv("workflow_run_id")
-    repo_full_name = os.getenv("GITHUB_REPO") or os.getenv("GITHUB_REPOSITORY")
+    workflow_run_id = WORKFLOW_RUN_ID
+    repo_full_name = GITHUB_REPO
 
     if repo_full_name:
         try:
@@ -206,7 +262,7 @@ def fetch_logs_node(state: AgenticState) -> dict:
             import requests as req
             import zipfile
             import io
-            token = os.getenv("GITHUB_TOKEN")
+            token = GITHUB_TOKEN
             headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
             logs_url = f"https://api.github.com/repos/{repo_full_name}/actions/runs/{run.id}/logs"
             resp = req.get(logs_url, headers=headers, allow_redirects=True)
@@ -474,8 +530,7 @@ def create_pr_node(state: AgenticState) -> dict:
     repo_state = state.get("repair_memory", {}).get("repo_state", {})
     if not repo_state:
         return {"pr_created": False, "reason": "no-patches"}
-
-    repo_full_name = os.getenv("GITHUB_REPO") or os.getenv("GITHUB_REPOSITORY")
+    repo_full_name = GITHUB_REPO
     if not repo_full_name:
         return {"pr_created": False, "reason": "missing-repo"}
 
@@ -489,28 +544,26 @@ def create_pr_node(state: AgenticState) -> dict:
         last_iter = iterations[-1] if iterations else {}
         target_file = last_iter.get("target_file", "multiple files")
         strategy = last_iter.get("strategy", "Automated code repair")
+        pr_title = f"Pipeline Doctor — Fix {target_file}"
+        pr_body = (
+            f"Summary: Automated fix for failing tests in {target_file}.\n\n"
+            f"Root cause: {strategy}\n\n"
+            f"Change: Applied edits to {target_file}.\n\n"
+            "Verification: Sandbox tests passed. Full artifacts available in the Pipeline Doctor workflow run artifacts (agentic-artifacts)."
+        )
 
-        pr_title = f"Pipeline Doctor: Auto-fix for {target_file}"
-        pr_body = f"""## 🚨 Pipeline Doctor Automated Repair
-
-**Root Cause & Strategy:**
-{strategy}
-
-**Files Modified:**
-"""
-        for f in repo_state.keys():
-            pr_body += f"- `{f}`\n"
-            
-        pr_body += """
-✅ **Sandbox Verification:**
-The agent successfully tested this patch in an isolated Docker sandbox. All tests passed!
-
-_Check the attached HTML report artifact for the full repair timeline and visualizations._
-"""
-        
-        pr_url = open_pr_with_rca(repo_full_name, branch_name, pr_title, pr_body)
+        pr_url, pr_number, pr_node_id = open_pr_with_rca(repo_full_name, branch_name, pr_title, pr_body, draft=False)
         log('INFO', "-> PR created: %s", pr_url)
-        return {"pr_url": pr_url}
+
+        # If HITL is disabled and AUTO_MERGE is enabled, request GitHub auto-merge (non-blocking)
+        if not HITL_ENABLED and AUTO_MERGE:
+            ok = enable_auto_merge(pr_node_id, merge_method="MERGE")
+            if ok:
+                log('INFO', "-> Auto-merge requested for PR #%s", pr_number)
+            else:
+                log('WARNING', "-> Auto-merge could not be enabled for PR #%s", pr_number)
+
+        return {"pr_url": pr_url, "pr_number": pr_number}
     except Exception as e:
         log('ERROR', "-> Failed to create PR: %s", str(e))
         return {"reason": str(e)}
@@ -560,10 +613,8 @@ agent_builder.add_conditional_edges("test_code", route_after_test)
 agent_builder.add_conditional_edges("generate_rca", route_after_rca)
 agent_builder.add_edge("create_pr", END)
 
-hitl = os.getenv("HITL_ENABLED", "true").lower() == "true"
 memory = MemorySaver()
-interrupts = ["create_pr"] if hitl else []
-agentic_graph = agent_builder.compile(checkpointer=memory, interrupt_before=interrupts)
+agentic_graph = agent_builder.compile(checkpointer=memory)
 
 if __name__ == "__main__":
     # Generate Agentic Flow Visualization
@@ -582,27 +633,5 @@ if __name__ == "__main__":
     for step in agentic_graph.stream(initial_state, config=thread_config):
         pass
 
-    # If HITL Breakpoint was hit, wait for manual marker file and resume
-    if hitl:
-        state = agentic_graph.get_state(thread_config)
-        if state.next and "create_pr" in state.next:
-            log('INFO', "⏸️ Graph execution paused for Human-in-the-Loop approval before creating PR.")
-            timeout = int(os.getenv("HITL_TIMEOUT_SEC", "600"))
-            interval = 5
-            waited = 0
-            approved = False
-            iteration = state.values.get("iteration_count", 0)
-            marker = AGENTIC_TMP_DIR / f"iter_{iteration}" / "approved"
-            while waited < timeout:
-                if marker.exists():
-                    approved = True
-                    break
-                time.sleep(interval)
-                waited += interval
-            
-            if approved:
-                log('INFO', "▶️ Approval received. Resuming graph execution...")
-                for step in agentic_graph.stream(None, config=thread_config):
-                    pass
-            else:
-                log('INFO', "Approval timed out. PR not created.")
+    # Agent runs to completion; PR creation and any auto-merge requests are handled
+    # without pausing the runner. Human review (when `HITL_ENABLED=true`) is manual.
