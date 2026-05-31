@@ -1,6 +1,6 @@
 import requests
 
-def add(a, b,c,d,e):
+def add(a, b,c):
     return a + b
 
 
