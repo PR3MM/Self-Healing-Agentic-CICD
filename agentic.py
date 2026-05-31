@@ -121,54 +121,40 @@ def create_branch_and_commit_multiple(repo_full_name: str, branch_name: str, pat
     gh = github_client()
     repo = gh.get_repo(repo_full_name)
     base_branch = GITHUB_BASE_BRANCH
+
+    # Get the latest commit on the base branch
     base_ref = repo.get_git_ref(f"heads/{base_branch}")
+    base_commit_sha = base_ref.object.sha
+    base_commit = repo.get_git_commit(base_commit_sha)
+
+    # Create blobs for each file and prepare tree items
+    tree_items = []
+    for file_path, file_content in patches_dict.items():
+        blob = repo.create_git_blob(file_content, "utf-8")
+        tree_items.append({
+            "path": file_path,
+            "mode": "100644",
+            "type": "blob",
+            "sha": blob.sha,
+        })
+
+    # Create a new tree based on the base commit's tree
+    base_tree_sha = base_commit.tree.sha
+    new_tree = repo.create_git_tree(tree_items, base_tree=base_tree_sha)
+
+    # Create a new commit pointing to the new tree
+    new_commit = repo.create_git_commit(commit_message, new_tree, [base_commit_sha])
+
+    # Delete existing branch ref if present, then create a new ref pointing to the new commit
     try:
         existing_ref = repo.get_git_ref(f"heads/{branch_name}")
         existing_ref.delete()
         log('INFO', "Deleted stale branch %s.", branch_name)
     except Exception:
         pass
-    repo.create_git_ref(ref=f"refs/heads/{branch_name}", sha=base_ref.object.sha)
-    log('INFO', "Created branch %s from %s.", branch_name, base_branch)
-    
-    for file_path, file_content in patches_dict.items():
-        existing_sha = None
-        # Try to read the file on the new branch with a few retries (branch creation can be eventually consistent)
-        existing = None
-        for attempt in range(3):
-            try:
-                existing = repo.get_contents(file_path, ref=branch_name)
-                existing_sha = existing.sha
-                break
-            except Exception as e:
-                # If it's a clear 'Not Found', stop trying — we'll create the file
-                msg = str(e)
-                if 'Not Found' in msg or getattr(e, 'status', None) == 404:
-                    existing = None
-                    break
-                # otherwise wait briefly and retry
-                time.sleep(0.5 * (attempt + 1))
 
-        if existing and existing_sha:
-            # Attempt update using the sha we fetched
-            try:
-                log('INFO', "Updating %s on branch %s (sha=%s).", file_path, branch_name, existing_sha)
-                repo.update_file(path=file_path, message=commit_message, content=file_content, sha=existing_sha, branch=branch_name)
-            except Exception as e:
-                # If update failed, try to recover by using the sha from the base branch (fallback)
-                try:
-                    base_content = repo.get_contents(file_path, ref=base_branch)
-                    base_sha = base_content.sha
-                    log('WARNING', "Update failed for %s; retrying with base branch sha %s.", file_path, base_sha)
-                    repo.update_file(path=file_path, message=commit_message, content=file_content, sha=base_sha, branch=branch_name)
-                except Exception:
-                    # As a last resort, try create_file (will fail if file truly exists)
-                    log('INFO', "Falling back to create %s on branch %s after update error.", file_path, branch_name)
-                    repo.create_file(path=file_path, message=commit_message, content=file_content, branch=branch_name)
-        else:
-            # File not found on branch — create it
-            log('INFO', "Creating %s on branch %s.", file_path, branch_name)
-            repo.create_file(path=file_path, message=commit_message, content=file_content, branch=branch_name)
+    repo.create_git_ref(ref=f"refs/heads/{branch_name}", sha=new_commit.sha)
+    log('INFO', "Created branch %s -> commit %s from base %s.", branch_name, new_commit.sha, base_branch)
 
 def open_pr_with_rca(repo_full_name: str, branch_name: str, pr_title: str, pr_body: str, draft: bool = False):
     gh = github_client()
