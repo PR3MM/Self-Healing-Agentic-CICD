@@ -64,7 +64,7 @@ jobs:
             ALLOWED_ACTIONS: ${{ github.event.inputs.ALLOWED_ACTIONS || 'create_pr' }}
             HITL_ENABLED: ${{ github.event.inputs.HITL_ENABLED || 'false' }}
             # If true and HITL is false, agent may auto-merge when checks pass
-            AUTO_MERGE: ${{ github.event.inputs.AUTO_MERGE || 'false' }}
+            AUTO_MERGE: ${{ github.event.inputs.AUTO_MERGE || 'true' }}
         run: python agentic.py
       - name: List staged artifacts
         if: always()
