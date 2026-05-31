@@ -518,6 +518,15 @@ def generate_rca_node(state: AgenticState) -> dict:
 
         # 3. Simple black & white HTML report (no AI generation)
         files_modified_html = "".join([f"<li>{f}</li>" for f in rca_obj["files_modified"]]) if rca_obj["files_modified"] else "<li>None</li>"
+        # Build iteration timeline HTML separately to avoid backslashes inside f-string expressions
+        timeline_html = ''.join([
+            f"<div style=\"margin-bottom:10px;\"><strong>Iteration {it.get('iteration')} — {it.get('target_file')}</strong>"
+            f"<div class=\"muted\">Strategy: {it.get('strategy')}</div>"
+            f"<pre>{json.dumps(it.get('edits_applied', []), indent=2)}</pre>"
+            f"<div class=\"muted\">Result: {it.get('result')} {it.get('reason') or ''}</div></div>"
+            for it in iterations
+        ]) or '<p>No iterations recorded.</p>'
+
         html_content = f"""
         <!doctype html>
         <html>
@@ -551,7 +560,7 @@ def generate_rca_node(state: AgenticState) -> dict:
 
             <div class="card">
                 <h2>Iteration Timeline</h2>
-                {''.join([f"<div style=\"margin-bottom:10px;\"><strong>Iteration {it.get('iteration')} — {it.get('target_file')}</strong><div class=\"muted\">Strategy: {it.get('strategy')}</div><pre>{json.dumps(it.get('edits_applied', []), indent=2)}</pre><div class=\"muted\">Result: {it.get('result')} {it.get('reason') or ''}</div></div>" for it in iterations]) or '<p>No iterations recorded.</p>'}
+                {timeline_html}
             </div>
 
             <div class="card">
