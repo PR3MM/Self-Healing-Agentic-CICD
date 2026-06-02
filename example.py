@@ -8,6 +8,6 @@ def fetch_status():
     resp = urllib.request.urlopen("https://example.com")
     return resp.getcode()
 
-
-def add(a, b, c=0, d=0, e=0):
+def add(*args):
+    return sum(args)
     return a + b + c + d + e
