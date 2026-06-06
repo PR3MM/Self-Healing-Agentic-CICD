@@ -20,8 +20,7 @@ class Todo(BaseModel):
     description: str
     completed: bool
     created_at: datetime
-
-# FastAPI App
+    author: Optional[str] = None
 app = FastAPI(title="Todo API", version="1.0.0")
 
 # In-memory storage
@@ -31,15 +30,14 @@ next_id = 1
 # CRUD Endpoints
 @app.get("/todos", response_model=List[Todo])
 def list_todos():
-    """Get all todos"""
     return [
         Todo(
             id=id,
-            title=todo["title"],
-            description=todo["description"],
-            completed=todo["completed"],
-            created_at=todo["created_at"],
-            author=todo["author"]
+            title=todo.get("title"),
+            description=todo.get("description"),
+            completed=todo.get("completed"),
+            created_at=todo.get("created_at"),
+            author=todo.get("author")
         )
         for id, todo in sorted(todos_db.items())
     ]
