@@ -1,7 +1,10 @@
 pytest
-requests
 PyGithub
 langgraph
 langchain-google-genai
 docker
 pydantic
+fastapi
+uvicorn
+sqlalchemy
+httpx
