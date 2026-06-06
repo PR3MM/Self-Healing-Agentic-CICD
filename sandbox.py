@@ -202,9 +202,9 @@ def run_tests(project_path, test_command, test_code_files=None,
 if __name__ == "__main__":
     project_path = "/path/to/your/project"
     test_command = "pytest" # or any other test command you want to run
-    test_code_files = ["test_example.py"] # list of test files to inject
-    patched_code_string = "def test_example():\n    assert True" # the patched code string
-    file_to_fix = "example.py" # the file to fix
+    test_code_files = ["tests/test_todos.py"] # list of test files to inject
+    patched_code_string = "def test_create_todo_success():\n    assert True" # the patched code string
+    file_to_fix = "main.py" # the file to fix
     run_tests(project_path, test_command, test_code_files, patched_code_string, file_to_fix)
     
     
