@@ -6,5 +6,3 @@ docker
 pydantic
 fastapi
 uvicorn
-sqlalchemy
-httpx
