@@ -30,7 +30,6 @@ jobs:
       pull-requests: write
       actions: read
 
-    # Run when triggered by a failed workflow_run OR when manually dispatched
     if: ${{ (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure') || github.event_name == 'workflow_dispatch' }}
 
     steps:
@@ -44,10 +43,6 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-      #uses - fetches code from github marketplace action
-      #run  - executes a command in the shell
-      # " | " allows us to write multi-line commands in YAML
-      #  so this command, basically tells Python pip command to find PiP module in the same Python version that we are using and to upgrade itself
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt || true
@@ -64,7 +59,6 @@ jobs:
             GEMINI_TEMP: '0.2'
             ALLOWED_ACTIONS: ${{ github.event.inputs.ALLOWED_ACTIONS || 'create_pr' }}
             HITL_ENABLED: ${{ github.event.inputs.HITL_ENABLED || 'false' }}
-            # If true and HITL is false, agent may auto-merge when checks pass
             AUTO_MERGE: ${{ github.event.inputs.AUTO_MERGE || 'true' }}
         run: python agentic.py
       - name: List staged artifacts
