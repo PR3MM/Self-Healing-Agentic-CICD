@@ -39,6 +39,7 @@ def list_todos():
             description=todo["description"],
             completed=todo["completed"],
             created_at=todo["created_at"]
+            priority = todo.get("priority", 0)
         )
         for id, todo in sorted(todos_db.items())
     ]
