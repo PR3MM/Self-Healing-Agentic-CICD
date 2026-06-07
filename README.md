@@ -17,7 +17,7 @@ A FastAPI-based Todo application with complete CRUD operations.
 
 ### Features
 - ✅ Create, Read, Update, Delete todos
-- ✅ SQLite database persistence
+- ✅ In-memory storage for fast local testing
 - ✅ Input validation using Pydantic
 - ✅ RESTful API design
 - ✅ Comprehensive test coverage
