@@ -20,6 +20,7 @@ class Todo(BaseModel):
     description: str
     completed: bool
     created_at: datetime
+    author: Optional[str] = None
 
 # FastAPI App
 app = FastAPI(title="Todo API", version="1.0.0")
@@ -39,7 +40,7 @@ def list_todos():
             description=todo["description"],
             completed=todo["completed"],
             created_at=todo["created_at"],
-            author=todo["author"]
+            author=todo.get("author")
         )
         for id, todo in sorted(todos_db.items())
     ]
