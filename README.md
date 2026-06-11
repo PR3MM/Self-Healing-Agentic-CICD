@@ -1,139 +1,109 @@
-# Self Healing CI/CD Pipeline with Todo API
+# Self-Healing CI/CD Pipeline
 
-A demonstration of an AI-powered self-healing CI/CD pipeline that automatically detects test failures and applies fixes using Gemini AI.
+This repository demonstrates an AI-assisted self-healing pipeline that detects failed CI jobs, analyzes the failure context, proposes code fixes with Gemini, validates the changes in an isolated sandbox, and opens a pull request for review.
 
 ## Project Overview
 
-This project showcases a complete backend Todo API integrated with a self-healing CI/CD pipeline. The pipeline:
-- Detects test failures automatically
-- Uses Gemini AI to analyze the root cause
-- Generates and applies fixes
-- Creates pull requests for human review
-- Supports human-in-the-loop approval
+The pipeline is built around an agentic workflow that:
+- Reads failure logs from CI or local sandbox runs
+- Identifies the most likely root cause
+- Generates focused code edits
+- Re-runs checks to confirm the fix
+- Creates a pull request when the repair is valid
 
-## Todo API - Backend Service
+The included FastAPI service and test suite provide a realistic target for the agent to repair, validate, and iterate against.
 
-A FastAPI-based Todo application with complete CRUD operations.
+## Key Parts
 
-### Features
-- ✅ Create, Read, Update, Delete todos
-- ✅ In-memory storage for fast local testing
-- ✅ Input validation using Pydantic
-- ✅ RESTful API design
-- ✅ Comprehensive test coverage
-- ✅ Health check endpoint
+- `agentic.py`: LangGraph-based self-healing orchestrator
+- `main.py`: FastAPI application used as the demo service
+- `sandbox.py`: Safe isolated test runner, backed by Docker
+- `tests/test_todos.py`: Test suite used to trigger and verify repairs
 
-### API Endpoints
+## How It Works
 
-#### Get All Todos
-```
-GET /todos
-Response: [
-  {
-    "id": 1,
-    "title": "Learn FastAPI",
-    "description": "Complete the tutorial",
-    "completed": false,
-    "created_at": "2026-06-06T10:30:00"
-  }
-]
-```
+1. A workflow failure is detected or test output is collected from the sandbox.
+2. The agent inspects logs and source files to determine the root cause.
+3. Gemini generates a surgical fix.
+4. The sandbox re-runs tests to confirm the change.
+5. If the fix passes, the agent can open a pull request for human review.
 
-#### Create Todo
-```
-POST /todos
-Body: {
-  "title": "New Todo",
-  "description": "Optional description",
-  "completed": false
-}
-Response: { ...created todo with id... }
+## Setup In A New Project
+
+Use these steps if you want to recreate this project from scratch in a fresh folder or repository.
+
+### 1. Create the project folder
+```bash
+mkdir self-healing-cicd
+cd self-healing-cicd
 ```
 
-#### Get Specific Todo
-```
-GET /todos/{todo_id}
-Response: { ...todo object... }
-```
-
-#### Update Todo
-```
-PUT /todos/{todo_id}
-Body: {
-  "title": "Updated title",
-  "completed": true
-}
-Response: { ...updated todo... }
-```
-
-#### Delete Todo
-```
-DELETE /todos/{todo_id}
-Response: { "message": "Todo deleted successfully" }
-```
-
-#### Delete All Todos
-```
-DELETE /todos
-Response: { "message": "All todos deleted successfully" }
-```
-
-#### Health Check
-```
-GET /health
-Response: { "status": "healthy" }
-```
-
-## Running the Application
-
-### Installation
+### 2. Create and activate a virtual environment
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+source .venv/bin/activate
+```
+
+On Windows, activate with:
+```bash
+.venv\Scripts\activate
+```
+
+### 3. Install dependencies
+```bash
 pip install -r requirements.txt
 ```
 
-### Run the API Server
+### 4. Add the project files
+Copy or create the same core files in the new project:
+- `main.py`
+- `agentic.py`
+- `sandbox.py`
+- `tests/test_todos.py`
+- `requirements.txt`
+
+### 5. Configure environment variables
+Set the values used by the agent before running it:
+- `GEMINI_API_KEY`
+- `GITHUB_TOKEN`
+- `GITHUB_REPO`
+- `GITHUB_BASE_BRANCH` if your default branch is not `main`
+- `HITL_ENABLED` if you want manual approval in the loop
+- `AUTO_MERGE` if you want the workflow to attempt automatic merge
+
+Example:
+```bash
+export GEMINI_API_KEY="your-key"
+export GITHUB_TOKEN="your-github-token"
+export GITHUB_REPO="owner/repo"
+```
+
+### 6. Run the demo API
 ```bash
 uvicorn main:app --reload --port 8000
 ```
 
-The API will be available at `http://localhost:8000`
+The service will be available at `http://localhost:8000`.
 
-### Run Tests
+### 7. Run the tests locally
 ```bash
 pytest tests/test_todos.py -v
 ```
 
-## Self-Healing Pipeline Architecture
+### 8. Run the self-healing agent
+```bash
+python agentic.py
+```
 
-The agentic.py script implements a LangGraph-based state machine that:
-1. Monitors CI/CD pipeline failures
-2. Analyzes test output and code
-3. Uses Gemini AI to generate fixes
-4. Validates fixes with sandbox testing
-5. Creates pull requests with approved fixes
+## Recommended Runtime Requirements
 
-### Components
-- **agentic.py**: Main self-healing agent orchestrator
-- **main.py**: Todo API application
-- **sandbox.py**: Isolated test execution environment using Docker
-- **tests/test_todos.py**: Comprehensive test suite
+- Python 3.10 or newer
+- Docker installed and running for sandbox execution
+- Access to a Gemini API key
+- Access to a GitHub repository and token with write permissions if you want PR creation
 
-## Technologies Used
-- **FastAPI**: Modern Python web framework
-- **SQLAlchemy**: ORM for database operations
-- **SQLite**: Lightweight database
-- **LangGraph**: Agent orchestration framework
-- **Gemini AI**: Code analysis and fix generation
-- **PyGithub**: GitHub integration
-- **Docker**: Sandbox environment for safe testing
+## Notes
 
-## Demo Scenarios
-
-The self-healing pipeline excels at:
-- Fixing simple logic errors (wrong operators, incorrect conditions)
-- Updating API endpoint implementations
-- Resolving dependency conflicts
-- Auto-generating fixes that pass all tests
-- Creating human-reviewable pull requests
+- The demo application uses in-memory state, so test runs are fast and isolated.
+- The agent is designed for iterative repair workflows, not one-shot patching.
+- Human review can remain enabled even after automated validation succeeds.

@@ -2,12 +2,11 @@ from __future__ import annotations
 import os
 import json
 import time
-import re
-import ast
 from pathlib import Path
 import difflib
 import io
 import zipfile
+import requests as req
 from typing import List, Dict, Any, TypedDict, Optional
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
@@ -42,9 +41,6 @@ GITHUB_BASE_BRANCH = os.getenv("GITHUB_BASE_BRANCH", "main")
 
 # Human-in-the-loop / approval
 HITL_ENABLED = os.getenv("HITL_ENABLED", "true").lower() == "true"
-HITL_TIMEOUT_SEC = int(os.getenv("HITL_TIMEOUT_SEC", "600"))
-AGENTIC_APPROVAL_LABEL = os.getenv("AGENTIC_APPROVAL_LABEL", "agentic-approved")
-AGENTIC_APPROVERS = set(a.strip() for a in os.getenv("AGENTIC_APPROVERS", "").split(",") if a.strip())
 AUTO_MERGE = os.getenv("AUTO_MERGE", "false").lower() == "true"
 
 llm = ChatGoogleGenerativeAI(model=GEMINI_MODEL, temperature=GEMINI_TEMP)
@@ -78,10 +74,6 @@ def save_audit(iteration: int, name: str, prompt: str, response_text: str) -> Pa
     }
     path.write_text(json.dumps(data, indent=2))
     return path
-
-# ------------------
-# Helpers for v2
-# ------------------
 
 def apply_edits(original_code: str, edits: List[dict]) -> str:
     lines = original_code.split('\n')
@@ -257,9 +249,7 @@ def fetch_logs_node(state: AgenticState) -> dict:
                         if step.conclusion == "failure":
                             logs_parts.append(f"=== Job: {job.name} | Step: {step.name} ===\nStatus: {step.conclusion}\n")
             
-            import requests as req
-            import zipfile
-            import io
+            
             token = GITHUB_TOKEN
             headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
             logs_url = f"https://api.github.com/repos/{repo_full_name}/actions/runs/{run.id}/logs"
